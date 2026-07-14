@@ -26,15 +26,15 @@ export function ErgodicityBadge() {
         }
         title={
           on
-            ? `Ergodicity effects active — effective p = ${(effectiveP * 100).toFixed(1)}% vs baseline ${(baseP * 100).toFixed(1)}%. Click to configure.`
-            : "Ergodicity simulation is a preview only. Click to open Ergodicity Lab."
+            ? `Pooling-adjusted survival active — effective p = ${(effectiveP * 100).toFixed(1)}% vs baseline ${(baseP * 100).toFixed(1)}%. Click to configure.`
+            : "Solidarity Reserve Lab is preview-only. Click to open it."
         }
       >
         <span>{on ? "⬤" : "◯"}</span>
         <span>
           {on
-            ? `Ergodicity included — effective p = ${(effectiveP * 100).toFixed(1)}%`
-            : "Baseline model — ergodicity excluded"}
+            ? `Pooling-adjusted p = ${(effectiveP * 100).toFixed(1)}%`
+            : "Baseline model — pooling excluded"}
         </span>
         <span style={{ opacity: 0.4 }}>↗</span>
       </span>

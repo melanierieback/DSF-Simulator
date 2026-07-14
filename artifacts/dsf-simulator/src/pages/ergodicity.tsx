@@ -43,7 +43,7 @@ function StatusBadge({ on }: { on: boolean }) {
           : { background: "hsl(237 22% 14%)", color: "hsl(237 40% 60%)", border: "1px solid hsl(237 22% 22%)" }
       }
     >
-      {on ? "⬤ Ergodicity included" : "◯ Baseline model — ergodicity excluded"}
+      {on ? "⬤ Pooling-adjusted survival included" : "◯ Baseline model — pooling excluded"}
     </span>
   );
 }
@@ -149,7 +149,9 @@ export default function ErgodicityPage() {
     averageInvestmentPerCompany: params.If,
     evergreenCycles: params.c,
     yearsPerCycle: params.yearsPerCycle,
-    timeHorizonYears: params.c * params.yearsPerCycle,
+    // Default horizon = ONE cycle, so lab survival is directly comparable
+    // with the main model's per-cycle p (Fix 3).
+    timeHorizonYears: params.yearsPerCycle,
   }));
 
   const patch = useCallback(<K extends keyof ErgoParams>(key: K, value: ErgoParams[K]) => {
@@ -169,8 +171,8 @@ export default function ErgodicityPage() {
       evergreenCycles: params.c,
       yearsPerCycle: params.yearsPerCycle,
       timeHorizonYears:
-        prev.timeHorizonYears === prev.evergreenCycles * prev.yearsPerCycle
-          ? params.c * params.yearsPerCycle
+        prev.timeHorizonYears === prev.yearsPerCycle
+          ? params.yearsPerCycle
           : prev.timeHorizonYears,
     }));
   }, [
@@ -224,7 +226,7 @@ export default function ErgodicityPage() {
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold text-white">Ergodicity &amp; Pooled Solidarity Reserve</h1>
+          <h1 className="text-2xl font-bold text-white">Solidarity Reserve Lab (pooled rescue simulation)</h1>
           <StatusBadge on={toggleOn} />
         </div>
         <p className="text-sm text-white/60 max-w-2xl">
@@ -255,16 +257,18 @@ export default function ErgodicityPage() {
       >
         <div className="flex-1 min-w-0 space-y-1.5">
           <p className="text-sm font-semibold text-white/90">
-            Include ergodicity / solidarity effects in main results
+            Include pooling-adjusted survival in main results
           </p>
           <p className="text-xs text-white/50">
             When <strong className="text-white/65">OFF</strong>, this tab is a preview only — the main dashboard continues to use
             the baseline model. When <strong className="text-white/65">ON</strong>, survival-dependent dashboard results (M, I, S,
-            Repayment) use the Monte Carlo effective survival rate.
+            Repayment) use a <em>pooling-adjusted survival estimate</em>: Case B&apos;s mean survival from a one-cycle
+            Monte Carlo run, genuinely a per-cycle rate. This is a solidarity-pooling adjustment, not an
+            &ldquo;ergodicity correction.&rdquo;
           </p>
           {toggleOn && (
             <p className="text-xs font-medium" style={{ color: "hsl(142 70% 65%)" }}>
-              Effective survival rate = {pct(result.effectiveSurvivalRateWithPooling)} (MC pooled mean)
+              Pooling-adjusted survival = {pct(result.effectiveSurvivalRateWithPooling)} (one-cycle MC pooled mean)
               &nbsp;vs. baseline {pct(ep.baseSurvivalRate)}.
             </p>
           )}
@@ -278,7 +282,7 @@ export default function ErgodicityPage() {
               : { background: "hsl(237 22% 14%)", color: "hsl(235 90% 74%)", border: "1px solid hsl(237 22% 26%)" }
           }
         >
-          {toggleOn ? "ON — Ergodicity included" : "OFF — Baseline only"}
+          {toggleOn ? "ON — Pooling included" : "OFF — Baseline only"}
         </button>
       </div>
 
@@ -353,35 +357,19 @@ export default function ErgodicityPage() {
             />
           </div>
 
-          {/* Shock / VUCA settings */}
+          {/* Failure decomposition */}
           <div
             className="rounded-xl p-5 space-y-5"
             style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}
           >
-            <SectionTitle>Shock / VUCA settings</SectionTitle>
+            <SectionTitle>Failure decomposition</SectionTitle>
             <SliderField
-              label="Annual shock probability"
-              value={ep.shockProbabilityPerCompanyPerYear}
-              onChange={(v) => patch("shockProbabilityPerCompanyPerYear", v)}
-              min={0} max={1} step={0.01}
-              format={pct}
-              hint="Annual probability of a serious but survivable shock per company."
-            />
-            <SliderField
-              label="Fatality without support"
-              value={ep.shockFatalityWithoutSupport}
-              onChange={(v) => patch("shockFatalityWithoutSupport", v)}
-              min={0} max={1} step={0.01}
-              format={pct}
-              hint="Probability a shock kills the company if no reserve support is available."
-            />
-            <SliderField
-              label="Degree of non-ergodicity"
-              value={ep.degreeOfNonErgodicity}
-              onChange={(v) => patch("degreeOfNonErgodicity", v)}
+              label="Share of failures that are shock-type / rescuable"
+              value={ep.shockShare}
+              onChange={(v) => patch("shockShare", v)}
               min={0} max={1} step={0.05}
               format={pct}
-              hint="VUCA / path-fragility level. Scales shock probability and severity."
+              hint="Fraction of total mortality attributable to rescuable shock events — the only branch where the pooled reserve can intervene. Does not change Case A's survival."
             />
           </div>
 
@@ -608,12 +596,12 @@ export default function ErgodicityPage() {
                 <pre
                   className="p-3 rounded-lg text-[11px] overflow-x-auto"
                   style={{ background: "hsl(237 22% 5%)", color: "hsl(235 80% 75%)" }}
-                >{`// Annual failure probability derived from cycle survival rate
-annualFailureRate = 1 - baseSurvivalRate^(1/timeHorizonYears)
+                >{`// Total annual mortality from PER-CYCLE survival (one cycle = yearsPerCycle)
+q = 1 - baseSurvivalRate^(1/yearsPerCycle)   // Case A reproduces p by construction
 
-// VUCA scaling (placeholder linear scale)
-effectiveShockProb = shockProb * (1 + degreeOfNonErgodicity)
-effectiveFatality  = shockFatality * (1 + 0.5 * degreeOfNonErgodicity)
+// Failure decomposition (no double counting)
+nonRescuableFailure = q * (1 - shockShare)
+fatalShock          = q * shockShare         // pooled reserve may attempt rescue here
 
 // Repayment timing (cycle-boundary concentration not yet modelled)
 yearRepayments = activeCount * (avgRepayment / timeHorizonYears)
@@ -643,8 +631,8 @@ resilienceScore = 50
                   <li>Runs: {ep.simulationRuns.toLocaleString()}</li>
                   <li>Horizon: {ep.timeHorizonYears} years</li>
                   <li>Portfolio: {ep.portfolioSize} companies</li>
-                  <li>Base survival: {fmtPct2(ep.baseSurvivalRate)}</li>
-                  <li>Effective MC survival (with pooling): {fmtPct2(result.effectiveSurvivalRateWithPooling)}</li>
+                  <li>Base survival (per cycle): {fmtPct2(ep.baseSurvivalRate)}</li>
+                  <li>Pooling-adjusted per-cycle survival (one-cycle MC, Case B): {fmtPct2(result.effectiveSurvivalRateWithPooling)}</li>
                 </ul>
               </div>
             </div>

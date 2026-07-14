@@ -40,7 +40,7 @@ export type DsfParams = {
    *  feeds back into the main model results. Default OFF. */
   includeErgodicityInResults: boolean;
   /** Ergodicity extension: MC-derived mean survival rate with pooled reserve.
-   *  Written by the Ergodicity Lab page when a simulation completes.
+   *  Written by the Solidarity Reserve Lab page when a simulation completes.
    *  Used in computeAll when includeErgodicityInResults is true. */
   ergodicEffectiveSurvivalRate: number;
   /** Theological mode for computing usury pressure U and the licit/usury M split.
@@ -368,7 +368,7 @@ export type Derived = {
 };
 
 export const computeAll = (params: DsfParams): Derived => {
-  // When ergodicity toggle is ON, route survival-dependent calculations
+  // When the pooling toggle is ON, route survival-dependent calculations
   // through the MC-derived effective survival rate instead of the raw slider.
   // The original `p` slider is preserved and never overwritten.
   const effectiveP = params.includeErgodicityInResults

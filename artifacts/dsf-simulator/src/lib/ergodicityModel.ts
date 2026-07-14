@@ -1,9 +1,22 @@
 /**
- * Ergodicity & Circular Finance / Pooled Reserve Extension
+ * Solidarity Reserve Lab (pooled rescue simulation)
  *
  * Monte Carlo simulation comparing:
  *   Case A — No pooling / solidarity reserve
  *   Case B — With pooling / solidarity reserve
+ *
+ * What this computes is the OPERATIONAL-SOLIDARITY story: how a pooled
+ * rescue reserve changes survival, repayments, and impact. It does NOT
+ * compute time-average growth rates or log-wealth trajectories — a true
+ * ergodicity module is specified separately and will be added later.
+ *
+ * Calibration (Fix 3, pack 1): `baseSurvivalRate` is PER-CYCLE survival
+ * (one cycle = `yearsPerCycle`), and Case A reproduces it by construction:
+ * total annual mortality q = 1 − p^(1/yearsPerCycle), decomposed into a
+ * non-rescuable share q·(1−shockShare) and a rescuable fatal-shock share
+ * q·shockShare — no channel is stacked on top of another.
+ * Acceptance (defaults 25 companies / p 0.4 / 10y / 1000 runs):
+ * Case A mean survival ≈ 0.40 ± 0.02; Case B > Case A (≈0.45–0.55).
  *
  * This module deliberately uses simplified placeholder formulas
  * to show directional resilience effects.  It is NOT a final
@@ -30,12 +43,14 @@ export type ErgoParams = {
   // ── Monte Carlo controls ──────────────────────────────────────────────────
   /** Number of simulation paths */
   simulationRuns: number;
-  /** Total years simulated (defaults to evergreenCycles * yearsPerCycle) */
+  /** Total years simulated (defaults to yearsPerCycle — ONE cycle, so lab
+   *  survival is directly comparable with the main model's per-cycle p) */
   timeHorizonYears: number;
-  /** Annual probability of a serious but potentially survivable shock per company */
-  shockProbabilityPerCompanyPerYear: number;
-  /** Probability a shock kills the company WITHOUT support */
-  shockFatalityWithoutSupport: number;
+  /** Share of total mortality attributable to rescuable shock events (0–1).
+   *  Decomposes q rather than stacking on top of it: non-rescuable failure
+   *  q·(1−shockShare), fatal-but-rescuable shock q·shockShare. Does NOT
+   *  change Case A's mean survival. */
+  shockShare: number;
   /** Probability that reserve support prevents a fatal shock */
   rescueEffectiveness: number;
   /** Fraction of repayments / surplus allocated to the pooled reserve */
@@ -50,11 +65,6 @@ export type ErgoParams = {
   supportAsLoanRecoveryRate: number;
   /** Simplified impact units per surviving company per year */
   averageCompanyImpact: number;
-  /**
-   * Degree of non-ergodicity / VUCA level (0–1).
-   * TODO: refine – currently scales shockProbability and shockFatality
-   */
-  degreeOfNonErgodicity: number;
 };
 
 export const ERGO_DEFAULTS: ErgoParams = {
@@ -65,9 +75,8 @@ export const ERGO_DEFAULTS: ErgoParams = {
   evergreenCycles: 3,
   yearsPerCycle: 10,
   simulationRuns: 1000,
-  timeHorizonYears: 30,
-  shockProbabilityPerCompanyPerYear: 0.10,
-  shockFatalityWithoutSupport: 0.60,
+  timeHorizonYears: 10, // one cycle — comparable with per-cycle p (Fix 3)
+  shockShare: 0.5,
   rescueEffectiveness: 0.50,
   poolingReserveAllocation: 0.20,
   initialPooledReserve: 0,
@@ -75,7 +84,6 @@ export const ERGO_DEFAULTS: ErgoParams = {
   reserveFloor: 0,
   supportAsLoanRecoveryRate: 0.70,
   averageCompanyImpact: 1,
-  degreeOfNonErgodicity: 0.5,
 };
 
 /** Per-run output from one Monte Carlo path */
@@ -117,16 +125,21 @@ export type ErgoResult = {
   repaymentsPreserved: number;
   impactPreserved: number;
   resilienceScore: number;
-  /** monteCarloMeanSurvivalRateWithPooling – used for effectiveSurvivalRate */
+  /** Pooling-adjusted PER-CYCLE survival estimate: Case B mean survival from
+   *  a one-cycle run (timeHorizonYears = yearsPerCycle), regardless of the
+   *  display horizon. This is what the main-results toggle feeds into
+   *  ergodicEffectiveSurvivalRate — a pooling-adjusted survival estimate,
+   *  not an "ergodicity correction". */
   effectiveSurvivalRateWithPooling: number;
 };
 
-/** Derive annual failure probability from cycle-level survival and timeHorizonYears */
-function annualFailureRate(baseSurvivalRate: number, timeHorizonYears: number): number {
-  // TODO: refine – assumes compound annual survival so that
-  // (1 - annualP_fail)^T ≈ baseSurvivalRate over the horizon
-  if (timeHorizonYears <= 0) return 0;
-  const annualSurvival = Math.pow(Math.max(baseSurvivalRate, 1e-9), 1 / timeHorizonYears);
+/** Total annual mortality derived from PER-CYCLE survival (Fix 3).
+ *  annualSurvival = baseSurvivalRate^(1/yearsPerCycle); q = 1 − annualSurvival.
+ *  With defaults (p = 0.4, 10y cycle): q ≈ 8.76%/yr, so Case A reproduces
+ *  the configured per-cycle survival by construction. */
+function annualFailureRate(baseSurvivalRate: number, yearsPerCycle: number): number {
+  if (yearsPerCycle <= 0) return 0;
+  const annualSurvival = Math.pow(Math.max(baseSurvivalRate, 1e-9), 1 / yearsPerCycle);
   return 1 - annualSurvival;
 }
 
@@ -149,9 +162,9 @@ function runCase(params: ErgoParams, withPooling: boolean): { result: CaseResult
     repaymentCap,
     averageInvestmentPerCompany,
     timeHorizonYears,
+    yearsPerCycle,
     simulationRuns,
-    shockProbabilityPerCompanyPerYear,
-    shockFatalityWithoutSupport,
+    shockShare,
     rescueEffectiveness,
     poolingReserveAllocation,
     initialPooledReserve,
@@ -159,15 +172,13 @@ function runCase(params: ErgoParams, withPooling: boolean): { result: CaseResult
     reserveFloor,
     supportAsLoanRecoveryRate,
     averageCompanyImpact,
-    degreeOfNonErgodicity,
   } = params;
 
-  // TODO: degreeOfNonErgodicity is a placeholder linear scale; refine to a
-  //       proper VUCA distribution modifier in a future pass.
-  const effectiveShockProb = Math.min(1, shockProbabilityPerCompanyPerYear * (1 + degreeOfNonErgodicity));
-  const effectiveFatality = Math.min(1, shockFatalityWithoutSupport * (1 + 0.5 * degreeOfNonErgodicity));
-
-  const baseAnnualFailure = annualFailureRate(baseSurvivalRate, timeHorizonYears);
+  // Total annual mortality q from PER-CYCLE survival, then decomposed —
+  // NOT stacked. Case A total mortality is exactly q, so its mean survival
+  // over one cycle equals baseSurvivalRate by construction (Fix 3).
+  // Acceptance (defaults 25 / 0.4 / 10y / 1000 runs): Case A ≈ 0.40 ± 0.02.
+  const q = annualFailureRate(baseSurvivalRate, yearsPerCycle);
   const avgRepaymentPerCompany = averageInvestmentPerCompany * repaymentCap;
 
   const runResults: RunResult[] = [];
@@ -189,31 +200,33 @@ function runCase(params: ErgoParams, withPooling: boolean): { result: CaseResult
       for (let c = 0; c < portfolioSize; c++) {
         if (!active[c]) continue;
 
-        // Base annual failure check
-        if (Math.random() < baseAnnualFailure) {
+        // Single-draw decomposition of total annual mortality q (Fix 3):
+        //   u < q·(1−shockShare)          → non-rescuable failure
+        //   q·(1−shockShare) ≤ u < q      → fatal shock (rescuable branch)
+        //   u ≥ q                         → survives this year's mortality draw
+        // Without pooling the two branches sum to exactly q — no double
+        // counting, and no parameter silently moves Case A off baseSurvivalRate.
+        const u = Math.random();
+        if (u < q * (1 - shockShare)) {
           active[c] = false;
           continue;
         }
-
-        // Shock event
-        if (Math.random() < effectiveShockProb) {
-          const wouldBeFatal = Math.random() < effectiveFatality;
-          if (wouldBeFatal) {
-            if (withPooling && reserve - maxSupportPerCompany >= reserveFloor) {
-              // Attempt rescue
-              const supportGiven = Math.min(maxSupportPerCompany, reserve - reserveFloor);
-              reserve -= supportGiven;
-              if (Math.random() < rescueEffectiveness) {
-                // Rescued – recover loan portion immediately
-                // TODO: model delayed recovery keyed to future repayment year
-                reserve += supportGiven * supportAsLoanRecoveryRate;
-                companiesRescued++;
-              } else {
-                active[c] = false;
-              }
+        if (u < q) {
+          // Fatal shock — the branch where the pooled reserve may rescue
+          if (withPooling && reserve - maxSupportPerCompany >= reserveFloor) {
+            // Attempt rescue
+            const supportGiven = Math.min(maxSupportPerCompany, reserve - reserveFloor);
+            reserve -= supportGiven;
+            if (Math.random() < rescueEffectiveness) {
+              // Rescued – recover loan portion immediately
+              // TODO: model delayed recovery keyed to future repayment year
+              reserve += supportGiven * supportAsLoanRecoveryRate;
+              companiesRescued++;
             } else {
               active[c] = false;
             }
+          } else {
+            active[c] = false;
           }
         }
 
@@ -312,6 +325,13 @@ export function runErgodicity(params: ErgoParams): ErgoResult {
 
   caseB.reserveTrajectory = avgTrajectory(trajB, params.timeHorizonYears);
 
+  // Pooling-adjusted PER-CYCLE survival for the main-results toggle: always
+  // from a one-cycle run, even when the displayed horizon is longer (Fix 3.5).
+  const oneCycleCaseB =
+    params.timeHorizonYears === params.yearsPerCycle
+      ? caseB
+      : runCase({ ...params, timeHorizonYears: params.yearsPerCycle }, true).result;
+
   const survivalUplift = caseB.meanSurvivalRate - caseA.meanSurvivalRate;
   const repaymentsPreserved = caseB.meanRepayments - caseA.meanRepayments;
   const impactPreserved = caseB.meanImpact - caseA.meanImpact;
@@ -334,7 +354,7 @@ export function runErgodicity(params: ErgoParams): ErgoResult {
     repaymentsPreserved,
     impactPreserved,
     resilienceScore,
-    effectiveSurvivalRateWithPooling: caseB.meanSurvivalRate,
+    effectiveSurvivalRateWithPooling: oneCycleCaseB.meanSurvivalRate,
   };
 }
 
