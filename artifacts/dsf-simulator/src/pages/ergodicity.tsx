@@ -400,18 +400,18 @@ export default function ErgodicityPage() {
               hint="Fraction of repayments / surplus allocated to the shared reserve."
             />
             <SliderField
-              label="Max support per company (£)"
+              label="Max support per company (€)"
               value={ep.maxSupportPerCompany}
               onChange={(v) => patch("maxSupportPerCompany", v)}
               min={0} max={500_000} step={10_000}
-              format={(v) => `£${(v / 1000).toFixed(0)}K`}
+              format={(v) => `€${(v / 1000).toFixed(0)}K`}
             />
             <SliderField
-              label="Reserve floor (£)"
+              label="Reserve floor (€)"
               value={ep.reserveFloor}
               onChange={(v) => patch("reserveFloor", v)}
               min={0} max={500_000} step={10_000}
-              format={(v) => `£${(v / 1000).toFixed(0)}K`}
+              format={(v) => `€${(v / 1000).toFixed(0)}K`}
               hint="Minimum reserve level not to spend below."
             />
           </div>
@@ -553,7 +553,7 @@ export default function ErgodicityPage() {
                 <LineChart data={reserveTrajectory} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(237 22% 14%)" />
                   <XAxis dataKey="year" tick={{ fontSize: 11, fill: "hsl(237 22% 55%)" }} label={{ value: "Year", position: "insideBottomRight", offset: -4, fill: "hsl(237 22% 55%)", fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11, fill: "hsl(237 22% 55%)" }} tickFormatter={(v) => `£${(v / 1000).toFixed(0)}K`} />
+                  <YAxis tick={{ fontSize: 11, fill: "hsl(237 22% 55%)" }} tickFormatter={(v) => `€${(v / 1000).toFixed(0)}K`} />
                   <RTooltip
                     contentStyle={{ background: "hsl(237 30% 9%)", border: "1px solid hsl(237 22% 22%)", fontSize: 12 }}
                     formatter={(v: number) => [fmtCompact(v), "Reserve"]}

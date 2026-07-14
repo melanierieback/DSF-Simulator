@@ -20,7 +20,7 @@ export type ErgoParams = {
   baseSurvivalRate: number;
   /** Repayment multiple cap (maps to global r) */
   repaymentCap: number;
-  /** Average investment per company (£) */
+  /** Average investment per company (€) */
   averageInvestmentPerCompany: number;
   /** Evergreen cycles (maps to global c) */
   evergreenCycles: number;
@@ -40,9 +40,9 @@ export type ErgoParams = {
   rescueEffectiveness: number;
   /** Fraction of repayments / surplus allocated to the pooled reserve */
   poolingReserveAllocation: number;
-  /** Starting pooled reserve (£) */
+  /** Starting pooled reserve (€) */
   initialPooledReserve: number;
-  /** Maximum support per company per rescue event (£) */
+  /** Maximum support per company per rescue event (€) */
   maxSupportPerCompany: number;
   /** Minimum reserve level not to spend below */
   reserveFloor: number;
@@ -343,7 +343,7 @@ export function fmtPct2(v: number) {
 }
 
 export function fmtCompact(v: number) {
-  if (Math.abs(v) >= 1_000_000) return `£${(v / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(v) >= 1_000) return `£${(v / 1_000).toFixed(1)}K`;
-  return `£${v.toFixed(0)}`;
+  if (Math.abs(v) >= 1_000_000) return `€${(v / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(v) >= 1_000) return `€${(v / 1_000).toFixed(1)}K`;
+  return `€${v.toFixed(0)}`;
 }
