@@ -39,4 +39,4 @@ First commit = clean import of the 14 June 2026 workspace baseline. Subsequent c
 
 ## License
 
-[MIT](./LICENSE)
+[GPL-3.0](./LICENSE)
