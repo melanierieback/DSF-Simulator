@@ -560,8 +560,10 @@ export const WORKED_EXAMPLES: WorkedExample[] = [
       If: 25000,
     },
     expected: {
-      multiple: 2.4,
-      investmentEUR: 1_875_000,
+      // Corrected per working paper v2.5.9 (2 Jul 2026 erratum fix):
+      // M = 3·4·0.6/(1+3·0.6) = 2.5714; Investment = 25k·(10 + 4·15) = €1.75M.
+      multiple: 2.57,
+      investmentEUR: 1_750_000,
       repaymentEUR: 4_500_000,
     },
   },
