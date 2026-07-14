@@ -20,15 +20,22 @@ import {
   computeUsuryByMode,
   computeTheologicalModeComparison,
   getTheologicalModeConfig,
+  resolveTheologicalMode,
   fmtMultiple,
   fmtNum,
   fmtPct,
 } from "@/lib/dsfModel";
+import { computeVerdicts, type SchoolVerdict } from "@/lib/verdicts";
 import {
   CartesianGrid,
+  LabelList,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip as RTooltip,
   XAxis,
   YAxis,
@@ -320,6 +327,79 @@ export default function TheologyPage() {
               {modeConfig.source}
             </p>
           </div>
+
+          {/* Contingency & substantiation (pack v2 I.1/I.3) */}
+          <div className="rule-top pt-4 space-y-3">
+            <h4 className="text-sm font-medium">Contingency &amp; substantiation</h4>
+            <SliderField
+              label="Claim contingency"
+              symbol="\varphi"
+              value={params.phi}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("phi", v)}
+              channel="theology"
+              format={fmtPct}
+              hint="How contingent the claim is on real outcomes: 0 = guaranteed (mutuum pole), 1 = fully contingent (societas pole). φ = 0.5 reproduces the old DSF working baseline. Operative φ_state — the ergodicity module's φ_dyn is display-only."
+            />
+            <SliderField
+              label="ψ_δ — substantiation of δ"
+              symbol="\psi_\delta"
+              value={params.psiDelta}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("psiDelta", v)}
+              channel="theology"
+              format={fmtPct}
+              hint="Share of the δ claim actually substantiated; the rest flows into D (unsubstantiated claim) and is charged as usury in every mode."
+            />
+            <SliderField
+              label="ψ_π — substantiation of π"
+              symbol="\psi_\pi"
+              value={params.psiPi}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("psiPi", v)}
+              channel="theology"
+              format={fmtPct}
+            />
+            <SliderField
+              label="ψ_ρ — substantiation of ρ"
+              symbol="\psi_\rho"
+              value={params.psiRho}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("psiRho", v)}
+              channel="theology"
+              format={fmtPct}
+            />
+            <SliderField
+              label="ψ_λ — substantiation of λ"
+              symbol="\psi_\lambda"
+              value={params.psiLambda}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("psiLambda", v)}
+              channel="theology"
+              format={fmtPct}
+            />
+            <SliderField
+              label="U_max — licitness gate"
+              symbol="U_{max}"
+              value={params.Umax}
+              min={0.1}
+              max={1}
+              step={0.01}
+              onChange={(v) => set("Umax", v)}
+              channel="theology"
+              hint="Founder decision (2 Jul 2026): T = 0 above this usury pressure. Exposed so the encoding can be contested."
+            />
+          </div>
         </div>
         {mode === "analyst" && <StoryDiagnosis diagnosis={theoDiagnosis} />}
       </aside>
@@ -381,7 +461,7 @@ export default function TheologyPage() {
           <div className="bg-card border border-card-border rounded-lg p-5">
             <div className="flex items-baseline justify-between mb-4">
               <h3 className="font-serif text-lg font-semibold">
-                Usury index <Eq tex={`U = ${fmtNum(modeConfig.wRho,2)}\\rho + ${fmtNum(modeConfig.wLambda,2)}\\lambda`} />
+                Usury index <Eq tex={`U = ${fmtNum(modeConfig.wRho,2)}(1-\\varphi)\\psi_\\rho\\rho + ${fmtNum(modeConfig.wLambda,2)}(\\psi_\\lambda\\lambda + D)`} />
               </h3>
               <p className="text-[11px] text-muted-foreground mt-0.5">{modeConfig.label}</p>
               <span
@@ -428,10 +508,10 @@ export default function TheologyPage() {
         {/* Cross-mode comparison */}
         <div className="bg-card border border-card-border rounded-lg p-5">
           <h3 className="font-serif text-lg font-semibold mb-1">
-            U and T under all five modes
+            U and T under all three modes
           </h3>
           <p className="text-xs text-muted-foreground mb-4">
-            Same repayment cap (<Eq tex="r" /> = <span className="num">{fmtNum(derived.r, 2)}</span>) divided differently under five theological traditions. Financial multiple M is unchanged.
+            Same repayment cap (<Eq tex="r" /> = <span className="num">{fmtNum(derived.r, 2)}</span>) read through three weight rows at φ = <span className="num">{fmtNum(params.phi, 2)}</span>. The U-band recomputes at each row&apos;s scholarly range endpoints; T is gated at U_max = <span className="num">{fmtNum(params.Umax, 2)}</span>. Financial multiple M is unchanged.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
@@ -441,12 +521,14 @@ export default function TheologyPage() {
                   <th className="text-right py-2 pr-3">w_ρ</th>
                   <th className="text-right py-2 pr-3">w_λ</th>
                   <th className="text-right py-2 pr-3">U</th>
-                  <th className="text-right py-2">T</th>
+                  <th className="text-right py-2 pr-3">U-band</th>
+                  <th className="text-right py-2">T (gated)</th>
                 </tr>
               </thead>
               <tbody>
                 {modeComparison.map((row) => {
-                  const isActive = row.key === params.theologicalMode;
+                  const isActive = row.key === params.theologicalMode
+                    || (getTheologicalModeConfig(params.theologicalMode).key === row.key);
                   const zone = row.U < 0.3 ? "text-finance" : row.U < 0.7 ? "text-impact" : "text-destructive";
                   return (
                     <tr key={row.key} className={`border-t border-card-border ${isActive ? "bg-theology/5" : ""}`}>
@@ -464,15 +546,24 @@ export default function TheologyPage() {
                       <td className="py-2 pr-3 text-right num text-muted-foreground">{fmtNum(row.wRho, 2)}</td>
                       <td className="py-2 pr-3 text-right num text-muted-foreground">{fmtNum(row.wLambda, 2)}</td>
                       <td className={`py-2 pr-3 text-right num font-semibold ${zone}`}>{fmtNum(row.U, 2)}</td>
-                      <td className="py-2 text-right num">{fmtNum(row.T, 2)}</td>
+                      <td className="py-2 pr-3 text-right num text-muted-foreground text-xs">
+                        {row.Ulo === row.Uhi ? "—" : `${fmtNum(row.Ulo, 2)}–${fmtNum(row.Uhi, 2)}`}
+                      </td>
+                      <td className={`py-2 text-right num ${row.T === 0 ? "text-destructive font-semibold" : ""}`}>{fmtNum(row.T, 2)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-3 italic">Click a school name to activate it. Rows are clickable.</p>
+          <p className="text-[11px] text-muted-foreground mt-3 italic">Click a school name to activate it. Legacy modes (mutuum, societas, DSF working) live on as φ-poles of Aquinas (unified) — old shared links still resolve.</p>
         </div>
+
+        {/* Verdict predicates panel (pack v2 I.5) */}
+        <VerdictsPanel />
+
+        {/* Usury plane (pack v2 I.6) — the flagship panel */}
+        <UsuryPlanePanel />
 
         {/* DSF / NEC equity-frame callout */}
         <div className="bg-theology/5 border border-theology/20 rounded-lg p-5 space-y-3">
@@ -482,10 +573,11 @@ export default function TheologyPage() {
               <h4 className="font-serif font-semibold text-theology">DSF / NEC instrument reading</h4>
               <p className="text-sm mt-2 leading-relaxed">
                 DSF / NEC invests through an equity-like partnership frame, not a simple loan.
-                Under the <em>Aquinas — partnership (societas)</em> mode, genuine risk-bearing is not charged as usury.
-                If the cap has λ = 0, usury pressure can fall to zero under this instrument-aware Thomistic reading.
-                This raises theological integrity relative to the DSF working baseline, because the baseline was
-                partially penalizing partnership risk as if it were loan risk.
+                In the unified Aquinas mode this is expressed by the claim contingency φ: at φ → 1
+                (the societas pole) genuine risk-bearing is not charged as usury, and if the cap has
+                λ = 0, usury pressure can fall to zero under this instrument-aware Thomistic reading.
+                The old DSF working baseline corresponds to φ = 0.5 — it partially penalized
+                partnership risk as if it were loan risk.
               </p>
               <div className="mt-3 p-3 bg-background/60 border border-theology/15 rounded text-xs leading-relaxed text-muted-foreground">
                 <span className="font-semibold text-theology">Important caveat: </span>
@@ -677,3 +769,221 @@ function Cell({
   );
 }
 
+
+// ── Pack v2 I.5 — verdict predicates panel ─────────────────────────────────
+
+function VerdictChip({ status }: { status: SchoolVerdict["status"] }) {
+  const cls =
+    status === "licit"
+      ? "bg-finance/15 text-finance"
+      : status === "boundary"
+        ? "bg-impact/15 text-impact"
+        : "bg-destructive/15 text-destructive";
+  return (
+    <span className={`text-xs uppercase tracking-wider px-2 py-0.5 rounded ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
+function VerdictsPanel() {
+  const { params, derived, patch, set } = useDsf();
+  const v = computeVerdicts({
+    delta: params.delta,
+    pi: params.pi,
+    rho: params.rho,
+    lambda: params.lambda,
+    r: derived.r,
+    phi: resolveTheologicalMode(params.theologicalMode, params.phi).phi,
+    psiDelta: params.psiDelta,
+    psiPi: params.psiPi,
+    psiRho: params.psiRho,
+    psiLambda: params.psiLambda,
+    phiMin: params.phiMin,
+    gAlt: params.gAlt,
+    yAlt: params.yAlt,
+    TLambda: params.TLambda,
+    rStar: params.rStar,
+    epsBand: params.epsBand,
+    screenNecessity: params.screenNecessity,
+    screenMarketPower: params.screenMarketPower,
+    psiMin: params.psiMin,
+  });
+  const rows: SchoolVerdict[] = [v.aquinas, v.olivi, v.salamanca, v.monti];
+
+  return (
+    <div className="bg-card border border-card-border rounded-lg p-5" data-testid="verdicts-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+        <h3 className="font-serif text-lg font-semibold">Verdict predicates</h3>
+        <span className="num text-xs text-muted-foreground">
+          X = (r−1) − (ψ_δδ + ψ_ππ) = <span className="text-theology font-semibold">{fmtNum(v.X, 2)}</span>
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Each school&apos;s operative test applied to the live deal — the excess claim <Eq tex="X" /> above substantiated compensation.
+      </p>
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.key} className="flex items-start gap-3 border-t border-card-border pt-2" data-testid={`verdict-${r.key}`}>
+            <div className="w-52 shrink-0">
+              <span className="text-sm font-medium">{r.label}</span>
+            </div>
+            <VerdictChip status={r.status} />
+            <p className="text-xs text-muted-foreground leading-snug flex-1">{r.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Λ panel (pack v2 II.6) */}
+      <div className="mt-4 p-3 rounded border border-card-border bg-background/50 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+        <span>
+          <span className="text-muted-foreground">Λ_time (operative) = e</span>
+          <sup className="text-muted-foreground">g·T</sup>
+          <span className="text-muted-foreground"> − 1 = </span>
+          <span className="num font-semibold text-theology">{fmtNum(v.LambdaTime, 3)}</span>
+        </span>
+        <span>
+          <span className="text-muted-foreground">Λ_ens (comparison) = (1+ȳ)</span>
+          <sup className="text-muted-foreground">T</sup>
+          <span className="text-muted-foreground"> − 1 = </span>
+          <span className="num">{fmtNum(v.LambdaEns, 3)}</span>
+        </span>
+        <button
+          onClick={() => patch({ gAlt: 0.03875, yAlt: 0.05, TLambda: 8 })}
+          className="text-xs px-2 py-1 rounded border border-card-border hover-elevate"
+          title="Paper §4.8 example: ȳ = 5%, σ = 15%, T = 8, g_alt ≈ ȳ − σ²/2 → Λ 0.363 vs 0.477"
+        >
+          Paper example preset
+        </button>
+        <button
+          onClick={() => patch({ gAlt: 0.04, yAlt: 0.05, TLambda: 10 })}
+          className="text-xs px-2 py-1 rounded border border-card-border hover-elevate"
+        >
+          Default Λ inputs
+        </button>
+        <button
+          onClick={() => patch({ pi: 0, rho: 0, lambda: 0, phi: 0, psiDelta: 1, psiPi: 1, psiRho: 1, psiLambda: 1 })}
+          className="text-xs px-2 py-1 rounded border border-theology/40 text-theology hover-elevate"
+          title="Preset, not a school: a δ̂-only claim at φ = 0 — the Monti di Pietà cost-recovery design point (plane point (0, 0))"
+        >
+          Monti (cost-recovery) preset
+        </button>
+      </div>
+
+      {/* Contest the encoding */}
+      <details className="mt-3 rounded border border-card-border">
+        <summary className="px-3 py-2 cursor-pointer text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors select-none">
+          Contest the encoding — verdict-layer parameters
+        </summary>
+        <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SliderField label="φ_min (Olivi committed-capital threshold)" value={params.phiMin} min={0} max={1} step={0.01} onChange={(x) => set("phiMin", x)} channel="theology" format={fmtPct} />
+          <SliderField label="g_alt (counterfactual time-average growth)" value={params.gAlt} min={0} max={0.15} step={0.0025} onChange={(x) => set("gAlt", x)} channel="theology" format={(x) => fmtPct(x)} />
+          <SliderField label="ȳ_alt (counterfactual ensemble mean)" value={params.yAlt} min={0} max={0.15} step={0.0025} onChange={(x) => set("yAlt", x)} channel="theology" format={(x) => fmtPct(x)} />
+          <SliderField label="T (Λ and Salamanca horizon, years)" value={params.TLambda} min={1} max={30} step={1} onChange={(x) => set("TLambda", x)} channel="theology" />
+          <SliderField label="r* (Salamanca just rate)" value={params.rStar} min={0} max={0.15} step={0.0025} onChange={(x) => set("rStar", x)} channel="theology" format={(x) => fmtPct(x)} />
+          <SliderField label="ε (band tolerance)" value={params.epsBand} min={0} max={0.05} step={0.0025} onChange={(x) => set("epsBand", x)} channel="theology" format={(x) => fmtPct(x)} />
+          <SliderField label="ψ_min (substantiation screen)" value={params.psiMin} min={0} max={1} step={0.01} onChange={(x) => set("psiMin", x)} channel="theology" format={fmtPct} />
+          <div className="space-y-2 text-xs">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={params.screenNecessity} onChange={(e) => set("screenNecessity", e.target.checked)} />
+              <span>Screen: no pricing against borrower&apos;s necessity</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={params.screenMarketPower} onChange={(e) => set("screenMarketPower", e.target.checked)} />
+              <span>Screen: no market power</span>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <p className="text-[11px] text-muted-foreground mt-3 italic">
+        These predicates are our formalizations of each school&apos;s operative test — not quotations
+        of the sources; every parameter is exposed so each encoding can be contested.
+      </p>
+    </div>
+  );
+}
+
+// ── Pack v2 I.6 — usury plane ──────────────────────────────────────────────
+
+const PLANE_REFS = [
+  { name: "Term loan", phi: 0.1, X: 0.35 },
+  { name: "Foenus nauticum", phi: 0.3, X: 0.6 },
+  { name: "Triple contract", phi: 0.15, X: 0.3 },
+  { name: "Pure equity", phi: 1.0, X: 0.6 },
+  { name: "Monti di Pietà", phi: 0, X: 0 },
+];
+
+function UsuryPlanePanel() {
+  const { params, derived } = useDsf();
+  const phiEff = resolveTheologicalMode(params.theologicalMode, params.phi).phi;
+  const X = derived.r - 1 - (params.psiDelta * params.delta + params.psiPi * params.pi);
+  const LambdaTime = Math.exp(params.gAlt * params.TLambda) - 1;
+  const bandTop = Math.pow(1 + params.rStar + params.epsBand, params.TLambda) - 1;
+  const yMax = Math.max(1.0, X * 1.15, bandTop * 1.05, 0.7);
+  const yMin = -0.25;
+  const live = [{ name: "Live deal", phi: phiEff, X }];
+
+  return (
+    <div className="bg-card border border-card-border rounded-lg p-5" data-testid="usury-plane">
+      <h3 className="font-serif text-lg font-semibold mb-1">The usury plane</h3>
+      <p className="text-xs text-muted-foreground mb-3">
+        Every deal is a point: <Eq tex="x = \varphi" /> (claim contingency), <Eq tex="y = X" /> (excess
+        claim). Regions are where each school says yes. The bold point is the live deal — move the
+        sliders and watch it travel.
+      </p>
+      <ResponsiveContainer width="100%" height={340}>
+        <ScatterChart margin={{ top: 16, right: 24, bottom: 8, left: 8 }}>
+          <CartesianGrid strokeDasharray="2 4" stroke="hsl(var(--rule))" />
+          <XAxis
+            type="number"
+            dataKey="phi"
+            domain={[0, 1]}
+            tickFormatter={(x) => x.toFixed(2)}
+            tick={{ fontSize: 10, fill: "hsl(237 15% 55%)" }}
+            label={{ value: "φ — claim contingency", position: "insideBottom", offset: -2, fontSize: 11, fill: "hsl(237 15% 55%)" }}
+          />
+          <YAxis
+            type="number"
+            dataKey="X"
+            domain={[yMin, yMax]}
+            tickFormatter={(x) => x.toFixed(1)}
+            tick={{ fontSize: 10, fill: "hsl(237 15% 55%)" }}
+            label={{ value: "X — excess claim", angle: -90, position: "insideLeft", fontSize: 11, fill: "hsl(237 15% 55%)" }}
+            width={48}
+          />
+          {/* Salamanca band (subject to screens) */}
+          <ReferenceArea x1={0} x2={1} y1={0} y2={Math.min(bandTop, yMax)} fill="hsl(38 80% 55%)" fillOpacity={0.06} />
+          {/* Olivi rectangle */}
+          <ReferenceArea x1={params.phiMin} x2={1} y1={0} y2={Math.min(LambdaTime, yMax)} fill="hsl(148 58% 55%)" fillOpacity={0.10} />
+          {/* Aquinas column */}
+          <ReferenceArea x1={0.97} x2={1} y1={yMin} y2={yMax} fill="hsl(var(--finance))" fillOpacity={0.14} />
+          {/* X ≤ 0 floor — licit for all schools */}
+          <ReferenceArea x1={0} x2={1} y1={yMin} y2={0} fill="hsl(var(--finance))" fillOpacity={0.10} />
+          <ReferenceLine y={0} stroke="hsl(var(--finance))" strokeDasharray="3 3" strokeWidth={1} />
+          <RTooltip
+            cursor={{ strokeDasharray: "3 3" }}
+            contentStyle={{ background: "hsl(237 30% 9%)", border: "1px solid hsl(237 22% 22%)", fontSize: 12 }}
+            formatter={(value: number, key: string) => [fmtNum(value, 2), key === "phi" ? "φ" : "X"]}
+            labelFormatter={() => ""}
+          />
+          <Scatter name="reference contracts" data={PLANE_REFS} fill="hsl(237 22% 55%)" shape="circle">
+            <LabelList dataKey="name" position="top" style={{ fontSize: 9, fill: "hsl(237 15% 60%)" }} />
+          </Scatter>
+          <Scatter name="live deal" data={live} fill="hsl(var(--theology))" shape="diamond">
+            <LabelList dataKey="name" position="top" style={{ fontSize: 10, fontWeight: 600, fill: "hsl(var(--theology))" }} />
+          </Scatter>
+        </ScatterChart>
+      </ResponsiveContainer>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[11px] text-muted-foreground">
+        <span><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: "hsl(var(--finance))", opacity: 0.35 }} />X ≤ 0 floor — licit for all schools; Monti di Pietà operates here at φ = 0</span>
+        <span><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: "hsl(var(--finance))", opacity: 0.45 }} />Aquinas column (φ ≥ 0.97)</span>
+        <span><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: "hsl(148 58% 55%)", opacity: 0.4 }} />Olivi wedge (φ ≥ φ_min, X ≤ Λ_time)</span>
+        <span><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1 align-middle" style={{ background: "hsl(38 80% 55%)", opacity: 0.4 }} />Salamanca band (X ≤ {fmtNum(bandTop, 2)}) — subject to screens</span>
+      </div>
+      <p className="text-[11px] text-muted-foreground mt-2 italic">
+        Regions render each school&apos;s stated conditions; the geometry is ours.
+      </p>
+    </div>
+  );
+}
