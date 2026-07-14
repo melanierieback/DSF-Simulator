@@ -43,6 +43,48 @@ export function binomPmf(n: number, k: number, p: number): number {
   return Math.exp(logBinomPmf(n, k, p));
 }
 
+// ── Real-argument lgamma (Lanczos, g = 7) for the beta-binomial ────────────
+
+const LANCZOS = [
+  676.5203681218851, -1259.1392167224028, 771.32342877765313,
+  -176.61502916214059, 12.507343278686905, -0.13857109526572012,
+  9.9843695780195716e-6, 1.5056327351493116e-7,
+];
+
+export function lnGamma(z: number): number {
+  if (z < 0.5) {
+    // reflection
+    return Math.log(Math.PI / Math.sin(Math.PI * z)) - lnGamma(1 - z);
+  }
+  z -= 1;
+  let x = 0.99999999999980993;
+  for (let i = 0; i < LANCZOS.length; i++) x += LANCZOS[i] / (z + i + 1);
+  const t = z + LANCZOS.length - 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+const lnBeta = (a: number, b: number) => lnGamma(a) + lnGamma(b) - lnGamma(a + b);
+
+/** Beta-binomial pmf for correlated survivals (pack v3 III.1; paper §8.5):
+ *  a = p(1/icc − 1), b = (1−p)(1/icc − 1);
+ *  pmf(s) = C(N,s)·B(a+s, b+N−s)/B(a,b). icc → 0 recovers the binomial.
+ *  The same math prices estimation risk on p (a Beta posterior gives an
+ *  identical pmf). */
+export function betaBinomPmf(N: number, s: number, p: number, icc: number): number {
+  if (icc <= 0) return binomPmf(N, s, p);
+  const a = p * (1 / icc - 1);
+  const b = (1 - p) * (1 / icc - 1);
+  return Math.exp(
+    lnFact(N) - lnFact(s) - lnFact(N - s) + lnBeta(a + s, b + N - s) - lnBeta(a, b),
+  );
+}
+
+/** Survivor-count pmf used across Fund-Kelly: binomial (icc = 0) or
+ *  beta-binomial (icc > 0). */
+export function survivorPmf(N: number, s: number, p: number, icc: number): number {
+  return betaBinomPmf(N, s, p, icc);
+}
+
 /** P(X ≥ kMin), X ~ Bin(n, p) — exact tail sum */
 export function binomTail(n: number, kMin: number, p: number): number {
   let s = 0;
@@ -108,13 +150,13 @@ export function realizedMultiple(N: number, k: number, r: number, S: number): nu
   return (r * k * S) / (N + (k - 1) * S);
 }
 
-export function fundKelly(N: number, p: number, k: number, r: number, eta: number): FundKellyResult {
+export function fundKelly(N: number, p: number, k: number, r: number, eta: number, icc = 0): FundKellyResult {
   const M = (r * k * p) / (1 + (k - 1) * p);
   const lnM = Math.log(M);
-  const pAllFail = Math.pow(1 - p, N);
+  const pAllFail = survivorPmf(N, 0, p, icc);
   let num = 0;
   for (let S = 1; S <= N; S++) {
-    num += binomPmf(N, S, p) * Math.log(realizedMultiple(N, k, r, S));
+    num += survivorPmf(N, S, p, icc) * Math.log(realizedMultiple(N, k, r, S));
   }
   const ElnMcond = num / (1 - pAllFail);
   const drag = lnM - ElnMcond;
@@ -129,23 +171,28 @@ export function fundKelly(N: number, p: number, k: number, r: number, eta: numbe
   };
 }
 
-/** g(f) = E[ln((1−f) + f·η·M̂)] over the FULL Ŝ distribution (Ŝ=0 included). */
-export function fundGOfF(N: number, p: number, k: number, r: number, eta: number, f: number): number {
+/** g(f) = E[ln((1−f) + f·η·M̂)] over the FULL Ŝ distribution (Ŝ=0 included).
+ *  The s = 0 term makes g(1) = −∞ at any icc — full deployment is
+ *  Kelly-forbidden. */
+export function fundGOfF(N: number, p: number, k: number, r: number, eta: number, f: number, icc = 0): number {
   let s = 0;
   for (let S = 0; S <= N; S++) {
     const Mhat = S === 0 ? 0 : realizedMultiple(N, k, r, S);
     const w = 1 - f + f * eta * Mhat;
-    s += binomPmf(N, S, p) * (w > 0 ? Math.log(w) : -Infinity);
+    s += survivorPmf(N, S, p, icc) * (w > 0 ? Math.log(w) : -Infinity);
   }
   return s;
 }
 
-/** argmax over a grid (fine enough for display + f★ marker). */
-export function fundFStar(N: number, p: number, k: number, r: number, eta: number): { fStar: number; gStar: number } {
+/** argmax over a grid on f ∈ [0, 0.999] (pack v3 III.2). Reserve floor =
+ *  1 − f★. Acceptance (η = 0.7): f★ ≈ 0.999 / 0.988 / 0.897 at
+ *  icc = 0 / 0.10 / 0.20 (floors 0.1% / 1.2% / 10.3%). Independent worlds
+ *  barely need a reserve; correlation is what makes E★ material. */
+export function fundFStar(N: number, p: number, k: number, r: number, eta: number, icc = 0): { fStar: number; gStar: number } {
   let best = { fStar: 0, gStar: -Infinity };
-  for (let i = 0; i <= 200; i++) {
-    const f = i / 200;
-    const g = fundGOfF(N, p, k, r, eta, f);
+  for (let i = 0; i <= 999; i++) {
+    const f = i / 1000;
+    const g = fundGOfF(N, p, k, r, eta, f, icc);
     if (g > best.gStar) best = { fStar: f, gStar: g };
   }
   return best;

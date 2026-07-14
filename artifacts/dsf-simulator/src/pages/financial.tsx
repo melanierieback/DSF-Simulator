@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   computeM,
+  computeElasticities,
   evergreenWealthSeries,
   vcBenchmarkSeries,
   fmtMultiple,
@@ -48,6 +49,8 @@ const IMPACT = "hsl(var(--impact))";
 
 export default function FinancialPage() {
   const { params, derived, set, applyExample } = useDsf();
+  // Pack v3 III.6 — elasticities of M (closed forms, paper §2.7)
+  const elasticities = computeElasticities(params.k, derived.pEff2);
 
   const mVsP = useMemo(() => {
     const out: Array<Record<string, number>> = [];
@@ -433,6 +436,27 @@ export default function FinancialPage() {
             size="lg"
             sub={`investment: ${fmtEUR(derived.Investment)}`}
           />
+        </div>
+
+        {/* Elasticity panel (pack v3 III.6; paper §2.7) */}
+        <div className="bg-card border border-card-border rounded-lg p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+            <h3 className="font-serif text-lg font-semibold">Which lever moves M?</h3>
+            <span className="num text-xs text-muted-foreground">
+              ε_r = {elasticities.epsR.toFixed(3)} · ε_p = {elasticities.epsP.toFixed(3)} · ε_k = {elasticities.epsK.toFixed(3)}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground leading-snug">
+            Elasticities of M (closed form): <Eq tex="\varepsilon_r = 1" /> exactly,{" "}
+            <Eq tex="\varepsilon_p = \tfrac{1}{1+(k-1)p}" />,{" "}
+            <Eq tex="\varepsilon_k = 1 - \tfrac{kp}{1+(k-1)p}" />. r is mechanically the
+            strongest lever — which is why the theology layer must bound it; p is the only
+            lever that improves every layer at once.
+          </p>
+          <p className="text-[11px] text-muted-foreground mt-2 italic">
+            Cap-speed alignment (paper §2.8): &ldquo;As fast as genuinely affordable, and no
+            faster&rdquo; is not a moral flourish; it is the incentive the cap itself creates.
+          </p>
         </div>
         {mode === "analyst" && (
           <StoryAnnotation channel="finance">

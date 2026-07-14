@@ -392,8 +392,9 @@ export default function OverviewPage() {
                   {s.rho.toFixed(2)} · λ={s.lambda.toFixed(2)}
                 </div>
                 <div className="col-span-2 num text-xs text-impact text-right">
-                  {/* Live computed I — exactly what applying this scenario
-                      yields with the current store (Fix 2). */}
+                  {/* Scenario badge convention (pack v3 III.3 / paper §6.4
+                      note): the table value keeps ε_p = 0; the coupled value
+                      is shown alongside rather than silently switching. */}
                   I≈
                   {Math.round(
                     computeAll({
@@ -403,7 +404,23 @@ export default function OverviewPage() {
                       pi: s.pi,
                       rho: s.rho,
                       lambda: s.lambda,
+                      epsP: 0,
                     }).I,
+                  )}
+                  {params.epsP > 0 && (
+                    <span className="block text-[10px] text-muted-foreground">
+                      w/ coupling:{" "}
+                      {Math.round(
+                        computeAll({
+                          ...params,
+                          ...SCENARIO_BASE,
+                          delta: s.delta,
+                          pi: s.pi,
+                          rho: s.rho,
+                          lambda: s.lambda,
+                        }).I,
+                      )}
+                    </span>
                   )}
                 </div>
                 <div className="col-span-1 text-right">

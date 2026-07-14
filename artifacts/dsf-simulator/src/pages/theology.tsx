@@ -600,7 +600,9 @@ export default function TheologyPage() {
             All five preserve <Eq tex="M \approx 2.56\times" /> — the moral
             character lives entirely in <Eq tex="U" /> and the impact it
             allows. Structural guarantees are relaxed in this illustration so
-            the U-coupling on openness and sovereignty is visible.
+            the U-coupling on openness and sovereignty is visible. By
+            convention the table keeps the survival coupling at ε_p = 0; the
+            overview badges show the coupled value alongside (paper §6.4 note).
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">

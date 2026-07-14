@@ -382,7 +382,7 @@ export default function ImpactPage() {
             value={fmtNum(derived.I, 0)}
             channel="impact"
             size="lg"
-            sub={`per cycle · total ${fmtNum(derived.Itotal, 0)} over ${params.c}`}
+            sub={`per cycle · compounding total ${fmtNum(derived.Itotal, 0)} over c = ${params.c} (linear form: ${fmtNum(derived.ItotalLinear, 0)})`}
             testId="kpi-impact-i"
           />
           <ValueCard
@@ -497,7 +497,19 @@ export default function ImpactPage() {
               Impact per evergreen cycle
             </h3>
             <p className="text-xs text-muted-foreground mb-3 num">
-              total over c = {params.c} cycles: {fmtNum(derived.Itotal, 0)}
+              compounding total over c = {params.c} cycles: {fmtNum(derived.Itotal, 0)}{" "}
+              · linear form: {fmtNum(derived.ItotalLinear, 0)}
+            </p>
+            <p className="text-[11px] text-muted-foreground mb-3 leading-snug">
+              The cohort scales with deployable capital, N<sub>t+1</sub> = (ηM)·N<sub>t</sub> at
+              constant ticket sizes — impact inherits the fund&apos;s time-average growth rate
+              (paper §7.2). Honest correction: along the lived trajectory the cohort factor is
+              e<sup>g</sup>, not ηM.
+            </p>
+            <p className="text-[11px] text-theology mb-3 leading-snug">
+              Survival coupling p(U,φ) live: p {fmtPct(params.p)} → {fmtPct(derived.pEff2)} at
+              ε_p = {params.epsP}. &ldquo;Extraction is self-defeating&rdquo; is a property of
+              the closed-form model (paper §5.1).
             </p>
             <div className="h-[220px]">
               <ResponsiveContainer>

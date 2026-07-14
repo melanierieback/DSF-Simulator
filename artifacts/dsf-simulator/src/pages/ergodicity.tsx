@@ -731,6 +731,15 @@ function TwoAveragesTab() {
           <StatCard key={t} label={`P(ahead) at T = ${t}`} value={`${(p * 100).toFixed(p < 0.001 ? 3 : 1)}%`} sub="exact binomial — chance a player is above 1×" />
         ))}
       </div>
+      <InfoBox>
+        <p className="text-white/55 text-xs">
+          <strong className="text-white/70">Recovery θ remark (paper §2.10):</strong> partial
+          recovery on failure softens the absorbing boundary but does not repeal it — at θ = 0.2
+          a single-company &ldquo;portfolio&rdquo; has a finite but crushing time average,
+          g = 0.6·ln 0.2 + 0.4·ln 3 ≈ −0.53/cycle. Diversification, not recovery, is what
+          rescues the time average.
+        </p>
+      </InfoBox>
     </div>
   );
 }
@@ -738,22 +747,22 @@ function TwoAveragesTab() {
 // ── II.2 Fund Kelly ─────────────────────────────────────────────────────────
 
 function FundKellyTab() {
-  const { params } = useDsf();
+  const { params, set } = useDsf();
   const r = computeR(params);
-  const N = params.N, p = params.p, k = params.k, eta = params.eta;
-  const fk = useMemo(() => fundKelly(N, p, k, r, Math.max(eta, 1e-9)), [N, p, k, r, eta]);
+  const N = params.N, p = params.p, k = params.k, eta = params.eta, icc = params.icc;
+  const fk = useMemo(() => fundKelly(N, p, k, r, Math.max(eta, 1e-9), icc), [N, p, k, r, eta, icc]);
   const stakeCurve = useMemo(() => {
     const rows: { f: number; fund: number; coin: number }[] = [];
     for (let i = 0; i <= 100; i++) {
       const f = i / 100;
-      rows.push({ f, fund: fundGOfF(N, p, k, r, 1, f) * 100, coin: coinGOfF(f) * 100 });
+      rows.push({ f, fund: fundGOfF(N, p, k, r, Math.max(eta, 1e-9), f, icc) * 100, coin: coinGOfF(f) * 100 });
     }
     return rows;
-  }, [N, p, k, r]);
-  const fStar = useMemo(() => fundFStar(N, p, k, r, 1), [N, p, k, r]);
+  }, [N, p, k, r, eta, icc]);
+  const fStar = useMemo(() => fundFStar(N, p, k, r, Math.max(eta, 1e-9), icc), [N, p, k, r, eta, icc]);
   const dragTable = useMemo(
-    () => [10, 25, 40, 100, 400].map((n) => ({ n, drag: fundKelly(n, p, k, r, 1).drag })),
-    [p, k, r],
+    () => [10, 25, 40, 100, 400].map((n) => ({ n, drag: fundKelly(n, p, k, r, 1, icc).drag })),
+    [p, k, r, icc],
   );
   const evergreen = useMemo(() => {
     const rows: { c: number; reported: number; typical: number }[] = [];
@@ -779,7 +788,35 @@ function FundKellyTab() {
         <StatCard label="Reported M (live params)" value={`${fk.M.toFixed(3)}×`} sub={`ln M = ${fk.lnM.toFixed(4)}`} />
         <StatCard label="E[ln M̂ | Ŝ≥1]" value={fk.ElnMcond.toFixed(4)} sub={`typical factor ${fk.typicalFactor.toFixed(3)}×`} accent={RESCUE} />
         <StatCard label="Volatility drag" value={fk.drag.toFixed(4)} sub="ln M − E[ln M̂ | Ŝ≥1]" accent="hsl(38 85% 62%)" />
-        <StatCard label="P(all fail)" value={fk.pAllFail.toExponential(1)} sub={`(1−p)^N at N=${N}`} />
+        <StatCard label="P(all fail)" value={fk.pAllFail.toExponential(1)} sub={icc > 0 ? `beta-binomial at icc=${icc.toFixed(2)}` : `(1−p)^N at N=${N}`} />
+      </div>
+
+      {/* Correlated survivals (pack v3 III.1) + Kelly-derived reserve (III.2) */}
+      <div className="rounded-xl p-5 space-y-4" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+        <SectionTitle>Correlated survivals &amp; the Kelly-derived reserve</SectionTitle>
+        {icc > 0 && (
+          <div className="rounded-lg px-3 py-2 text-xs font-semibold" style={{ background: "hsl(38 60% 16%)", border: "1px solid hsl(38 60% 32%)", color: "hsl(38 85% 68%)" }}>
+            One recession is one draw against all of them at once.
+          </div>
+        )}
+        <SliderField
+          label="Intra-class correlation of survivals (icc)"
+          value={icc}
+          min={0} max={0.45} step={0.01}
+          onChange={(v) => set("icc", v)}
+          format={(v) => v.toFixed(2)}
+          hint="0 = independent binomial; > 0 switches Ŝ to beta-binomial (a = p(1/icc−1), b = (1−p)(1/icc−1)). The same math prices estimation risk on p — a Beta posterior gives an identical pmf."
+        />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <StatCard label="Kelly f★ (η, icc live)" value={fStar.fStar.toFixed(3)} sub={`g(f★) = ${(fStar.gStar * 100).toFixed(2)}%/cycle`} accent={RESCUE} />
+          <StatCard label="Reserve floor 1 − f★" value={`${((1 - fStar.fStar) * 100).toFixed(1)}%`} sub="Kelly-derived E★ share of the pot" accent="hsl(38 85% 62%)" />
+          <StatCard label="g(1)" value="−∞" sub="full deployment is Kelly-forbidden (Ŝ = 0 has positive probability)" />
+        </div>
+        <p className="text-[11px] text-white/40 leading-snug">
+          The honest reading (paper §8.4): independent worlds barely need a reserve;
+          correlation is what makes E★ material. Acceptance at η = 0.7: f★ ≈ 0.999 / 0.988 /
+          0.897 at icc = 0 / 0.10 / 0.20 (floors 0.1% / 1.2% / 10.3%).
+        </p>
       </div>
       <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
         <SectionTitle>Stake-fraction curve g(f) — fund vs coin-toss reference</SectionTitle>
@@ -979,6 +1016,15 @@ function BorrowerLenderTab() {
           is shown for transparency only and never enters U. A contract can be formally contingent
           (high φ_state) and still carry real drag (φ_dyn &lt; 1) — that gap is the honest price
           of the capital.
+        </p>
+        <p className="mt-3 text-white/55">
+          <strong className="text-white/75">The practical corollary (paper §8.7):</strong> a fixed
+          schedule offers <em>scheduled</em> certainty; what an investor wants is <em>realized</em>{" "}
+          certainty — and the table shows the two come apart. The design answer is structural:{" "}
+          <strong className="text-white/75">schedule the pool, not the company.</strong>{" "}
+          Contingency belongs at the company layer, where it protects the trajectories repayment
+          rides on; predictability belongs at the fund layer, where pooling and the reserve make a
+          rule-bound distribution cadence possible without any company facing a calendar.
         </p>
       </InfoBox>
     </div>

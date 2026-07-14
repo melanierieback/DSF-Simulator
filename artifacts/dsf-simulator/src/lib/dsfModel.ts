@@ -84,6 +84,18 @@ export type DsfParams = {
   screenMarketPower: boolean;
   /** Substantiation screen threshold: min(ψ_i) ≥ psiMin */
   psiMin: number;
+  // ── Pack v3 Part III — paper v2.8.x features ──
+  /** Intra-class correlation of survivals ∈ [0, 0.5) (paper §8.5). 0 = the
+   *  independent binomial; > 0 switches Fund-Kelly to beta-binomial. */
+  icc: number;
+  /** Survival-coupling strength ε_p (paper §5.1 eq. 41; founder calibration
+   *  0.5, 2 Jul 2026): pEff2 = p·(1 − ε_p(1−φ)U) feeds M, I, S, Investment,
+   *  Repayment. The theology scenario table/badges keep ε_p = 0 by
+   *  convention and display both values. */
+  epsP: number;
+  /** Recovery fraction θ on failures (paper §2.10):
+   *  M = (r·k·p + θ(1−p)) / (1+(k−1)p). θ = 0 reproduces all legacy numbers. */
+  theta: number;
 };
 
 export const DEFAULTS: DsfParams = {
@@ -144,6 +156,10 @@ export const DEFAULTS: DsfParams = {
   screenNecessity: true,
   screenMarketPower: true,
   psiMin: 0.8,
+  // Pack v3 III defaults:
+  icc: 0,
+  epsP: 0.5, // founder calibration (paper §5.1, 2 Jul 2026)
+  theta: 0,
 };
 
 export const clamp = (x: number, lo = 0, hi = Infinity) =>
@@ -154,8 +170,26 @@ export const computeR = (params: Pick<DsfParams, "delta" | "pi" | "rho" | "lambd
     ? 1 + params.delta + params.pi + params.rho + params.lambda
     : params.rDirect;
 
-export const computeM = (r: number, k: number, p: number) =>
-  (r * k * p) / (1 + (k - 1) * p);
+/** Single-cycle multiple with optional recovery fraction θ on failures
+ *  (pack v3 III.4; paper §2.10). θ = 0 reproduces every legacy number;
+ *  acceptance: θ = 0.2 at N-defaults with r = 3 gives M = 2.3538. */
+export const computeM = (r: number, k: number, p: number, theta = 0) =>
+  (r * k * p + theta * (1 - p)) / (1 + (k - 1) * p);
+
+/** The p(U,φ) survival coupling (pack v3 III.3; paper §5.1 eq. 41).
+ *  Acceptance (r = 3): (φ=0.5, U=0.25) → p 0.375, M 2.2500;
+ *  (φ=0, U=0.55) → p 0.290, M 2.0139; (φ=0.9, U=0.13) → p 0.3974, M 2.3019.
+ *  "Extraction is self-defeating" is a property of the closed-form model. */
+export const computePEff2 = (p: number, U: number, phi: number, epsP: number) =>
+  clamp(p * (1 - epsP * (1 - phi) * U), 0);
+
+/** Elasticities of M (pack v3 III.6; paper §2.7). ε_r = 1 exactly.
+ *  Acceptance (defaults p=0.4, k=5): 1.000 / 0.385 / 0.231. */
+export const computeElasticities = (k: number, p: number) => ({
+  epsR: 1,
+  epsP: 1 / (1 + (k - 1) * p),
+  epsK: 1 - (k * p) / (1 + (k - 1) * p),
+});
 
 export const computeMLicit = (
   delta: number,
@@ -501,6 +535,8 @@ export type Derived = {
   d: number;
   I: number;
   Itotal: number;
+  /** Linear I·c form, kept for display beside the compounding form (III.5) */
+  ItotalLinear: number;
   Mtotal: number;
   S: number;
   F: number;
@@ -513,6 +549,8 @@ export type Derived = {
   Recycle: number;
   forcedOpenness: boolean;
   forcedSovereignty: boolean;
+  /** Survival after the p(U,φ) coupling (III.3) — what M/I/S actually used */
+  pEff2: number;
 };
 
 export const computeAll = (params: DsfParams): Derived => {
@@ -524,25 +562,29 @@ export const computeAll = (params: DsfParams): Derived => {
     : params.p;
 
   const r = computeR(params);
-  const M = computeM(r, params.k, effectiveP);
-  const Mlicit = computeMLicit(params.delta, params.pi, params.k, effectiveP);
-  const Musury = computeMUsury(params.rho, params.lambda, params.k, effectiveP);
-  // Mode-weighted licit/usury split — display-only, does not change M.
-  const MlicitMode = computeMLicitMode(
-    params.delta, params.pi, params.rho, params.lambda, params.k, effectiveP,
-    params.theologicalMode, params.phi,
-    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
-  );
-  const MusuryMode = computeMUsuryMode(
-    params.rho, params.lambda, params.k, effectiveP,
-    params.theologicalMode, params.phi, params.delta, params.pi,
-    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
-  );
   // Generalized U (pack v2 I.3): aquinas_unified @ φ=0.5, ψ≡1 reproduces the
   // original 0.5·ρ + λ exactly.
   const U = computeUsuryByMode(
     params.delta, params.pi, params.rho, params.lambda,
     params.theologicalMode, params.phi,
+    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+  );
+  // p(U,φ) survival coupling (pack v3 III.3; paper §5.1 eq. 41): feeds M, I,
+  // S, Investment, Repayment. Uses the RESOLVED φ (aliases may force it).
+  const phiEff = resolveTheologicalMode(params.theologicalMode, params.phi).phi;
+  const pEff2 = computePEff2(effectiveP, U, phiEff, params.epsP);
+  const M = computeM(r, params.k, pEff2, params.theta);
+  const Mlicit = computeMLicit(params.delta, params.pi, params.k, pEff2);
+  const Musury = computeMUsury(params.rho, params.lambda, params.k, pEff2);
+  // Mode-weighted licit/usury split — display-only, does not change M.
+  const MlicitMode = computeMLicitMode(
+    params.delta, params.pi, params.rho, params.lambda, params.k, pEff2,
+    params.theologicalMode, params.phi,
+    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+  );
+  const MusuryMode = computeMUsuryMode(
+    params.rho, params.lambda, params.k, pEff2,
+    params.theologicalMode, params.phi, params.delta, params.pi,
     params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
   );
   const T = computeT(U, params.mu, params.eta, params.Umax);
@@ -551,10 +593,20 @@ export const computeAll = (params: DsfParams): Derived => {
   const forcedSov = params.stewardOwnership && params.euRetention;
   const o = computeOU(params.o0, params.beta, U, forcedOS);
   const d = computeDU(params.d0, params.gamma, U, forcedSov);
-  const I = computeImpact(params.N, effectiveP, L, o, d, params.a, params.e);
-  const Itotal = I * params.c;
+  // I(U,φ) = N·p(U,φ)·L(U)·o(U)·d(U)·a·e (paper eq. 42)
+  const I = computeImpact(params.N, pEff2, L, o, d, params.a, params.e);
+  // Compounding impact (pack v3 III.5; paper §7.2 eq. 50): the cohort scales
+  // with deployable capital, N_{t+1} = (ηM)·N_t at constant ticket sizes.
+  // Guard ηM = 1 → the linear form. Honest correction (paper): along the
+  // lived trajectory the cohort factor is e^g, not ηM.
+  const etaM = params.eta * M;
+  const ItotalLinear = I * params.c;
+  const Itotal =
+    Math.abs(etaM - 1) < 1e-9
+      ? ItotalLinear
+      : (I * (Math.pow(etaM, params.c) - 1)) / (etaM - 1);
   const Mtotal = Math.pow(M, params.c);
-  const S = Math.round(effectiveP * params.N);
+  const S = Math.round(pEff2 * params.N);
   const F = params.N - S;
   const Investment = params.If * (F + params.k * S);
   const Repayment = r * params.k * params.If * S;
@@ -578,6 +630,7 @@ export const computeAll = (params: DsfParams): Derived => {
     d,
     I,
     Itotal,
+    ItotalLinear,
     Mtotal,
     S,
     F,
@@ -590,6 +643,7 @@ export const computeAll = (params: DsfParams): Derived => {
     Recycle,
     forcedOpenness: forcedOS,
     forcedSovereignty: forcedSov,
+    pEff2,
   };
 };
 
@@ -733,6 +787,10 @@ export const WORKED_EXAMPLES: WorkedExample[] = [
     expected: {
       // Corrected per working paper v2.5.9 (2 Jul 2026 erratum fix):
       // M = 3·4·0.6/(1+3·0.6) = 2.5714; Investment = 25k·(10 + 4·15) = €1.75M.
+      // NOTE (pack v3 III.3 convention): the paper-table values hold at
+      // ε_p = 0; with the survival coupling live (ε_p = 0.5 default) the
+      // applied dashboard shows M ≈ 2.512 — display both, never silently
+      // switch.
       multiple: 2.57,
       investmentEUR: 1_750_000,
       repaymentEUR: 4_500_000,
