@@ -83,6 +83,12 @@ export default function CooperativePage() {
     const totalReinvest = sim.reduce((s, r) => s + r.ReinvestFund, 0);
     const totalDist = sim.reduce((s, r) => s + r.DistPool, 0);
     const finalE = sim[sim.length - 1]?.Eclose ?? coop.E0_target;
+    // Cash-ledger aggregates (Fix 5, v5.1 §11.2)
+    const anyInsolvent = sim.some((r) => r.insolvent);
+    const peakArrears = sim.reduce((s, r) => Math.max(s, r.arrearsClose), 0);
+    const finalArrears = sim[sim.length - 1]?.arrearsClose ?? 0;
+    const totalRaids = sim.reduce((s, r) => s + r.reserveRaid, 0);
+    const finalCash = sim[sim.length - 1]?.coopCashClose ?? 0;
     const totalPaidByVintage: Record<string, number> = {};
     coop.members.forEach((m) => {
       totalPaidByVintage[m.id] = sim.reduce(
@@ -90,7 +96,7 @@ export default function CooperativePage() {
         0,
       );
     });
-    return { totalIn, totalDS, totalReinvest, totalDist, finalE, totalPaidByVintage };
+    return { totalIn, totalDS, totalReinvest, totalDist, finalE, anyInsolvent, peakArrears, finalArrears, totalRaids, finalCash, totalPaidByVintage };
   }, [sim, coop]);
 
   const { mode } = useStoryMode();
@@ -587,11 +593,36 @@ export default function CooperativePage() {
           />
         </div>
 
+        {/* Insolvency warning banner (Fix 5, v5.1 §11.2) */}
+        {totals.anyInsolvent && (
+          <div
+            className="rounded-lg p-4 border text-sm"
+            style={{ background: "hsl(0 55% 12%)", borderColor: "hsl(0 55% 30%)", color: "hsl(0 70% 78%)" }}
+            data-testid="coop-insolvency-banner"
+          >
+            <p className="font-semibold mb-1">
+              Launch stack cannot carry the pre-redemption years
+            </p>
+            <p className="text-xs leading-snug" style={{ color: "hsl(0 45% 70%)" }}>
+              Obligations (opex, tax, liabilities, NPV debt service) exceed cash in at least one
+              year: peak unfunded arrears {fmtEURcompact(totals.peakArrears)}
+              {totals.totalRaids > 0 ? <> after raiding the evergreen reserve for {fmtEURcompact(totals.totalRaids)}</> : null}
+              {totals.finalArrears > 1e-6
+                ? <>; {fmtEURcompact(totals.finalArrears)} remains unfunded at the end of the run</>
+                : <>; the ledger recovers within the run</>}
+              . Increase member capital, the NPV loan, or the launch buffer. Distributions are
+              gated until arrears are cleared, cash is non-negative, and E ≥ E★ (v5.1 §11.2).
+            </p>
+          </div>
+        )}
+
         {/* Yearly waterfall table */}
         <div className="bg-card border border-card-border rounded-lg p-5">
           <h3 className="font-serif text-lg font-semibold mb-1">Yearly fund waterfall</h3>
           <p className="text-xs text-muted-foreground mb-3 equation">
-            <Eq tex="\mathrm{Net} = \Pi_t + \mathrm{Liq}_t + \mathrm{Other}_t - O^{coop}_t - \mathrm{Tax}^{coop}_t - \mathrm{Liab}^{other}_t - \mathrm{DS}^{NPV}_t" />
+            <Eq tex="\mathrm{Def}_t = \max(0,\, O^{coop}_t + \mathrm{Tax}^{coop}_t + \mathrm{Liab}^{other}_t + \mathrm{DS}^{NPV}_t - \mathrm{Gross}_t)" />
+            {" "}· deficits met from cash, then E (recorded raid), remainder accrues as arrears; surpluses replenish cash, then flow{" "}
+            <Eq tex="\mathrm{Net} \to \mathrm{Reserve} \to \mathrm{Reinvest} \to \mathrm{DistPool}" />
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
@@ -600,6 +631,9 @@ export default function CooperativePage() {
                   <th className="text-left py-2 pr-2">t</th>
                   <th className="text-right py-2 px-2">Π</th>
                   <th className="text-right py-2 px-2">DS NPV</th>
+                  <th className="text-right py-2 px-2 text-theology">Deficit</th>
+                  <th className="text-right py-2 px-2">Coop cash</th>
+                  <th className="text-right py-2 px-2 text-theology">Arrears</th>
                   <th className="text-right py-2 px-2">Net</th>
                   <th className="text-right py-2 px-2">Avail</th>
                   <th className="text-right py-2 px-2">η</th>
@@ -612,10 +646,16 @@ export default function CooperativePage() {
               </thead>
               <tbody>
                 {sim.map((r) => (
-                  <tr key={r.t} className="border-t border-card-border">
-                    <td className="py-1.5 pr-2 font-medium">t = {r.t}</td>
+                  <tr key={r.t} className={`border-t border-card-border${r.insolvent ? " bg-destructive/5" : ""}`}>
+                    <td className="py-1.5 pr-2 font-medium">
+                      t = {r.t}
+                      {r.insolvent && <span className="ml-1 text-theology" title="Unfunded obligations outstanding">⚠</span>}
+                    </td>
                     <td className="num py-1.5 px-2 text-right">{fmtEURcompact(r.redInflow)}</td>
                     <td className="num py-1.5 px-2 text-right text-theology">−{fmtEURcompact(r.DSNPV)}</td>
+                    <td className="num py-1.5 px-2 text-right text-theology">{r.Def > 0 ? fmtEURcompact(r.Def) : "—"}</td>
+                    <td className="num py-1.5 px-2 text-right">{fmtEURcompact(r.coopCashClose)}</td>
+                    <td className="num py-1.5 px-2 text-right text-theology">{r.arrearsClose > 0 ? fmtEURcompact(r.arrearsClose) : "—"}</td>
                     <td className="num py-1.5 px-2 text-right">{fmtEURcompact(r.NetProceeds)}</td>
                     <td className="num py-1.5 px-2 text-right">{fmtEURcompact(r.AvailAfterReserve)}</td>
                     <td className="num py-1.5 px-2 text-right">{fmtPct(r.etaPolicy)}</td>

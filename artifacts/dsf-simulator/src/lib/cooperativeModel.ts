@@ -49,9 +49,18 @@ export type CoopYearState = {
   other: number;
   GrossProceeds: number;
   IntNPV: number;
-  PrinNPV: number;
+  PrinNPV: number; // scheduled principal billed this year
   DSNPV: number;
-  NetProceeds: number;
+  // ── Cash ledger (Fix 5; simulation framework v5.1 §11.2) ──
+  coopCashOpen: number;
+  coopCashClose: number;
+  Def: number; // eq. 21: max(0, opex+tax+liab+DS − GrossProceeds)
+  reserveRaid: number; // drawn from E to cover deficit (recorded raid)
+  arrearsOpen: number; // unpaid obligations carried in (incl. loan service)
+  arrearsClose: number; // cumulative outstanding after this year
+  insolvent: boolean; // arrearsClose > 0 (or negative opening cash)
+  principalPaid: number; // principal actually paid (arrears + scheduled)
+  NetProceeds: number; // real surplus entering the waterfall (ledger-based)
   AvailAfterReserve: number;
   Eopen: number;
   Etarget: number;
@@ -61,7 +70,7 @@ export type CoopYearState = {
   DistPool: number;
   newDeploy: number;
   Eclose: number;
-  loanBalance: number; // outstanding NPV loan
+  loanBalance: number; // outstanding NPV loan, net of principal actually PAID
   vintages: VintagePayoutState[];
 };
 
@@ -167,27 +176,102 @@ export function simulateCooperative(
 
   const principalPerYear = p.Tloan > 0 ? p.L_NPV / p.Tloan : 0;
 
+  // ── Cash ledger state (Fix 5; simulation framework v5.1 §11.2) ──────────
+  // Opening cooperative cash = the launch buffer: C_coop_0 = B_fund + (F_deploy − G_1)
+  // (paper eq. before eq. 21). Deficits are met in order from coopCash, then
+  // from the evergreen pot E (a recorded reserve raid), with any remainder
+  // accruing as arrears — INCLUDING unpayable loan service, which no longer
+  // amortizes silently: loanBalance falls only by principal actually paid,
+  // so interest keeps accruing on the true outstanding balance, and unpaid
+  // scheduled principal sits in arrearsPrincipal until covered.
+  // Surpluses replenish coopCash to the launch-buffer level before entering
+  // the waterfall. Distributions require a clean ledger (eq. 22):
+  //   DistPool_t > 0 ⇒ Arr_t = 0 ∧ coopCash_t ≥ 0 ∧ E_t ≥ E★_t.
+  // Payment order within a year (documented choice; ±k on exact figures):
+  //   prior arrearsOther → prior arrearsPrincipal → current opex+tax+liab
+  //   → current interest → current scheduled principal.
+  const launchStack = computeLaunchStack(p);
+  const bufferTarget = p.Bfund + (launchStack.Fdeploy - p.G1);
+  let coopCash = bufferTarget;
+  let arrearsOther = 0; // unpaid opex/tax/liab/interest
+  let arrearsPrincipal = 0; // unpaid scheduled loan principal
+  let cumBilledPrincipal = 0;
+
   for (let t = 0; t < p.yearsToSim; t++) {
     const redInflow = redemptionStream[t] ?? 0;
     const liquidation = p.liquidationProceeds[t] ?? 0;
     const other = p.otherProceeds[t] ?? 0;
     const GrossProceeds = redInflow + liquidation + other;
 
+    const coopCashOpen = coopCash;
+    const arrearsOpen = arrearsOther + arrearsPrincipal;
+    const Eopen = E;
+
+    // Interest accrues on the true outstanding balance (net of PAID principal).
     const IntNPV = loanBalance > 0 ? loanBalance * p.iNPV : 0;
-    const PrinNPV = Math.min(loanBalance, principalPerYear);
+    // Scheduled principal keeps billing until the full principal is billed;
+    // unpaid tranches wait in arrearsPrincipal (term effectively extends).
+    const PrinNPV = Math.max(0, Math.min(principalPerYear, p.L_NPV - cumBilledPrincipal));
+    cumBilledPrincipal += PrinNPV;
     const DSNPV = IntNPV + PrinNPV;
 
-    const NetProceeds = Math.max(
-      0,
-      GrossProceeds - p.coopOpex - p.coopTax - p.liabOther - DSNPV,
-    );
+    // eq. 21 — the period deficit (before past arrears):
+    const currentObligations = p.coopOpex + p.coopTax + p.liabOther + DSNPV;
+    const Def = Math.max(0, currentObligations - GrossProceeds);
+
+    // ── Pay obligations from: gross proceeds → coopCash → E (recorded raid) ──
+    let available = GrossProceeds + Math.max(0, coopCash) + Math.max(0, E);
+    const cashDrawCap = Math.max(0, coopCash);
+    const raidCap = Math.max(0, E);
+    let principalPaid = 0;
+
+    const dueOther = arrearsOther + p.coopOpex + p.coopTax + p.liabOther + IntNPV;
+    const duePrincipal = arrearsPrincipal + PrinNPV;
+
+    const paidOther = Math.min(available, dueOther);
+    available -= paidOther;
+    const paidPrincipal = Math.min(available, duePrincipal);
+    available -= paidPrincipal;
+    principalPaid = paidPrincipal;
+
+    arrearsOther = dueOther - paidOther;
+    arrearsPrincipal = duePrincipal - paidPrincipal;
+    loanBalance = Math.max(0, loanBalance - paidPrincipal);
+
+    // How much of the payments came from cash and from the reserve raid:
+    const fundedByProceeds = Math.min(GrossProceeds, paidOther + paidPrincipal);
+    const shortfallAfterProceeds = paidOther + paidPrincipal - fundedByProceeds;
+    const cashDraw = Math.min(cashDrawCap, shortfallAfterProceeds);
+    const reserveRaid = Math.min(raidCap, shortfallAfterProceeds - cashDraw);
+    coopCash = coopCash - cashDraw;
+    E = E - reserveRaid;
+
+    // ── Surplus: replenish coopCash to the launch buffer, then the waterfall ──
+    let surplus = Math.max(0, GrossProceeds - (paidOther + paidPrincipal) + 0);
+    // (surplus is what remains of THIS year's proceeds after all obligations;
+    //  cash/reserve draws only ever cover shortfalls, so surplus > 0 implies
+    //  cashDraw = reserveRaid = 0.)
+    const replenish = Math.min(surplus, Math.max(0, bufferTarget - coopCash));
+    coopCash += replenish;
+    surplus -= replenish;
+
+    const arrearsClose = arrearsOther + arrearsPrincipal;
+    const insolvent = arrearsClose > 1e-6 || coopCash < -1e-6;
+
+    const NetProceeds = surplus;
     const AvailAfterReserve = Math.max(0, NetProceeds - p.reserveAlloc);
 
     const etaPolicy = t <= p.earlySplit ? p.etaEarly : p.etaLate;
     const targetFloor = Math.max(0, p.E_target - E);
     const reinvestFloor = Math.max(etaPolicy * AvailAfterReserve, targetFloor);
     const ReinvestFund = Math.min(AvailAfterReserve, reinvestFloor);
-    const DistPool = AvailAfterReserve - ReinvestFund;
+    // eq. 22 — distributions require a clean ledger (E measured after this
+    // year's reinvest top-up). Gate-blocked cash is RETAINED in the evergreen
+    // pot rather than silently vanishing.
+    const cleanLedger = arrearsClose <= 1e-6 && coopCash >= 0 && E + ReinvestFund >= p.E_target;
+    const distributable = AvailAfterReserve - ReinvestFund;
+    const DistPool = cleanLedger ? distributable : 0;
+    const retainedBlocked = cleanLedger ? 0 : distributable;
 
     const newDeploy = p.newDeploy[t] ?? 0;
 
@@ -227,9 +311,9 @@ export function simulateCooperative(
       };
     });
 
-    // Residual flows back into the evergreen pot per §11.3.
-    const Eopen = E;
-    const Eclose = Math.max(0, E + ReinvestFund + residual - newDeploy);
+    // Residual from headroom clipping and gate-blocked distributions flow
+    // back into the evergreen pot per §11.3 / eq. 22.
+    const Eclose = Math.max(0, E + ReinvestFund + retainedBlocked + residual - newDeploy);
 
     out.push({
       t,
@@ -240,6 +324,14 @@ export function simulateCooperative(
       IntNPV,
       PrinNPV,
       DSNPV,
+      coopCashOpen,
+      coopCashClose: coopCash,
+      Def,
+      reserveRaid,
+      arrearsOpen,
+      arrearsClose,
+      insolvent,
+      principalPaid,
       NetProceeds,
       AvailAfterReserve,
       Eopen,
@@ -255,7 +347,9 @@ export function simulateCooperative(
     });
 
     E = Eclose;
-    loanBalance = Math.max(0, loanBalance - PrinNPV);
+    // NOTE: loanBalance is reduced in the ledger above by principal actually
+    // PAID — the old unconditional `loanBalance -= PrinNPV` amortized the
+    // loan silently even in years when nothing was paid (Fix 5).
   }
 
   return out;
