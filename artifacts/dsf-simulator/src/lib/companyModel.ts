@@ -219,7 +219,12 @@ export const ILLUSTRATIVE_EXAMPLE: CompanyParams = {
   gammaEarly: 1.0, // PDF: no redemption in early years; reinvest all
   gammaLate: 0.6,
   earlySplit: 2, // late starts at Y3 (index 3) — γ_late applies from Y3 onward
-  C0: 100_000,
+  // C0 and D per the working paper's §12 assumptions (stated explicitly as
+  // of paper v4.1, 2 July 2026). Acceptance: Y3 Tax/FCF/ResGap/Red =
+  // 85k/163k/40k/49.2k; Y4 Tax/FCF/ResGap/Red = 224k/532k/0/212.8k;
+  // cash positive every year (Day 1 ≈ 17k), alive throughout;
+  // cumulative redeemed ≈ 262k (cap Ω = 1,500k).
+  C0: 283_000,
   Lmin: 0,
   rhoRes: 3,
   CSO: 0,
@@ -228,8 +233,8 @@ export const ILLUSTRATIVE_EXAMPLE: CompanyParams = {
     { label: "Day 1", N: 3, W: 95_333, O: 0, R: 40_000, D: 0, Capex: 20_000, dNWC: 0, I: 0 },
     { label: "Year 1", N: 5, W: 96_000, O: 0, R: 180_000, D: 0, Capex: 35_000, dNWC: 10_000, I: 400_000 },
     { label: "Year 2", N: 8, W: 96_500, O: 0, R: 520_000, D: 0, Capex: 60_000, dNWC: 20_000, I: 350_000 },
-    { label: "Year 3", N: 12, W: 97_667, O: 0, R: 1_550_000, D: 0, Capex: 90_000, dNWC: 40_000, I: 0 },
-    { label: "Year 4", N: 18, W: 96_889, O: 0, R: 2_700_000, D: 0, Capex: 120_000, dNWC: 80_000, I: 0 },
+    { label: "Year 3", N: 12, W: 97_667, O: 0, R: 1_550_000, D: 38_000, Capex: 90_000, dNWC: 40_000, I: 0 },
+    { label: "Year 4", N: 18, W: 96_889, O: 0, R: 2_700_000, D: 60_000, Capex: 120_000, dNWC: 80_000, I: 0 },
   ],
 };
 
