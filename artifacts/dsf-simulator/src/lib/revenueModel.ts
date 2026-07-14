@@ -219,7 +219,7 @@ export interface SimResult {
   // Key metrics
   breakEvenYear: number | null;       // first year EBITDA ≥ 0
   fcfPositiveYear: number | null;     // first year FCF ≥ 0
-  redemptionReadyYear: number | null; // first year cumRedeemable ≥ reserveFloor
+  redemptionReadyYear: number | null; // first year redeemable > 0, i.e. FCF exceeds the reserve floor (Fix 6.1: comment now matches the code)
   fullRepayYear: number | null;       // first year cumRedeemable ≥ Ω
   year5Revenue: number;
   year10Revenue: number;
@@ -276,6 +276,12 @@ function simAdvisory(
   });
 }
 
+// Fix 6.2: named constant replaces the magic number. The contract stream is
+// normalized to the default win rate, so winRate = BASELINE_WIN_RATE leaves
+// the raw contract counts unchanged and other values scale proportionally.
+// Default behavior is identical to the previous inline `/ 0.35`.
+const BASELINE_WIN_RATE = 0.35;
+
 function simProcurement(
   p: ProcurementParams,
   horizon: number,
@@ -283,7 +289,7 @@ function simProcurement(
   return Array.from({ length: horizon }, (_, i) => {
     // Contracts grow linearly, scaled by access factor and win rate
     const rawContracts = p.initialContracts + p.contractsGrowthPerYear * i;
-    const contracts = rawContracts * p.procurementAccessFactor * (p.winRate / 0.35); // normalised
+    const contracts = rawContracts * p.procurementAccessFactor * (p.winRate / BASELINE_WIN_RATE); // default-normalized
     return { units: Math.max(0, contracts), revenue: Math.max(0, contracts) * p.avgContractValue };
   });
 }
@@ -302,6 +308,11 @@ function simManagedServices(
 }
 
 // ── FCF builder ───────────────────────────────────────────────────────────────
+//
+// Fix 6.1 note: this page's "FCF" is EBITDA − tax only — no Capex and no
+// ΔNWC — and is therefore OPTIMISTIC relative to the company page's full FCF
+// chain (companyModel.ts subtracts both). The UI labels it "operating FCF
+// (pre-capex)" accordingly.
 
 function buildResult(
   modelType: RevenueModelType,

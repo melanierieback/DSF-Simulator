@@ -520,7 +520,7 @@ export default function RevenuePage() {
                 <ReferenceLine y={0} stroke="hsl(0 60% 55%)" strokeDasharray="3 3" strokeWidth={1.5} label={{ value: "Break-even", position: "insideTopLeft", fontSize: 10, fill: "hsl(0 55% 65%)" }} />
                 <ReferenceLine y={opex.reserveFloor} stroke="hsl(38 92% 58%)" strokeDasharray="3 3" strokeWidth={1} label={{ value: "L* floor", position: "insideBottomRight", fontSize: 10, fill: "hsl(38 82% 65%)" }} />
                 <Area type="monotone" dataKey="EBITDA" name="EBITDA" stroke="hsl(148 58% 55%)" fill="url(#ebitdaGrad)" strokeWidth={1.5} dot={false} />
-                <Area type="monotone" dataKey="FCF" name="FCF (after tax)" stroke={activeMeta.color} fill="url(#fcfGrad)" strokeWidth={2} dot={false} />
+                <Area type="monotone" dataKey="FCF" name="Operating FCF (pre-capex, after tax)" stroke={activeMeta.color} fill="url(#fcfGrad)" strokeWidth={2} dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -528,6 +528,8 @@ export default function RevenuePage() {
             The amber dashed line is the resilience reserve floor L* = {fmtEUR(opex.reserveFloor)}.
             Redemption can only begin when FCF consistently exceeds this threshold.
             Tax (τ = {fmtPct(opex.taxRate)}) is applied to positive EBITDA only.
+            &ldquo;FCF&rdquo; here is operating FCF (EBITDA − tax, pre-capex, no ΔNWC) — optimistic
+            relative to the Company page&apos;s full FCF chain.
           </p>
         </div>
 
