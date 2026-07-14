@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "DSF Unified Model Simulator"
+version = "1.0.0"
+id = "artifacts/dsf-simulator"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 3001
+
+[services.development]
+run = "pnpm --filter @workspace/dsf-simulator run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dsf-simulator", "run", "build" ]
+publicDir = "artifacts/dsf-simulator/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "3001"
+BASE_PATH = "/"
