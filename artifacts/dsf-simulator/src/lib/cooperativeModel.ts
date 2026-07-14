@@ -31,7 +31,10 @@ export type CoopParams = {
   coopTax: number; // fixed cooperative tax line, €/yr (placeholder)
   liabOther: number; // other liabilities, €/yr
   iNPV: number; // loan interest rate
-  Tloan: number; // loan term in years (straight-line principal)
+  Tloan: number; // principal amortization years (straight-line), AFTER any interest-only period
+  /** Interest-only years at the start of the NPV loan (pack v3 IV.4);
+   *  0 = amortize from year 0 (legacy behavior). */
+  loanInterestOnlyYears: number;
   reserveAlloc: number; // periodic Board reserve allocation, €/yr
   E_target: number; // evergreen target each period
   etaEarly: number; // policy reinvest share, t ≤ earlySplit
@@ -211,7 +214,11 @@ export function simulateCooperative(
     const IntNPV = loanBalance > 0 ? loanBalance * p.iNPV : 0;
     // Scheduled principal keeps billing until the full principal is billed;
     // unpaid tranches wait in arrearsPrincipal (term effectively extends).
-    const PrinNPV = Math.max(0, Math.min(principalPerYear, p.L_NPV - cumBilledPrincipal));
+    // No principal is billed during the interest-only window (pack v3 IV.4).
+    const PrinNPV =
+      t < (p.loanInterestOnlyYears ?? 0)
+        ? 0
+        : Math.max(0, Math.min(principalPerYear, p.L_NPV - cumBilledPrincipal));
     cumBilledPrincipal += PrinNPV;
     const DSNPV = IntNPV + PrinNPV;
 
@@ -374,20 +381,181 @@ export const LAUNCH_DEFAULTS: CoopParams = {
   C_SO: 25_000,
   C_inc: 15_000,
 
-  yearsToSim: 5,
+  // 14 years so the §15.8 end-to-end run (first distribution year 7, cap
+  // progress by year 13) is visible; the ledger tolerates short arrays.
+  yearsToSim: 14,
   coopOpex: 25_000,
   coopTax: 0,
   liabOther: 0,
   iNPV: 0.04,
   Tloan: 5,
+  loanInterestOnlyYears: 0,
   reserveAlloc: 10_000,
-  E_target: 250_000,
+  // §15.8 end-to-end run: the launch stack's own reserve target E★₀ = 50k is
+  // the operative E★ for the minimum viable structure (was 250k, an
+  // arbitrary pre-v5 page default that gated distributions forever).
+  E_target: 50_000,
   etaEarly: 0.85,
   etaLate: 0.6,
   earlySplit: 2,
   newDeploy: [0, 0, 0, 0, 0],
   liquidationProceeds: [0, 0, 0, 0, 0],
   otherProceeds: [0, 0, 0, 0, 0],
+};
+
+// ----------------------------------------------------------------------------
+// Pack v3 IV.2–IV.4 — launch feasibility, §15.8 end-to-end run, cap coverage.
+// ----------------------------------------------------------------------------
+
+/** Scheduled NPV-loan debt service (planning view: assumes payments made;
+ *  declining balance; honors the interest-only window). */
+export function scheduledDebtService(p: CoopParams, years: number): { Int: number; Prin: number; DS: number }[] {
+  const out: { Int: number; Prin: number; DS: number }[] = [];
+  let bal = p.L_NPV;
+  const io = p.loanInterestOnlyYears ?? 0;
+  const prinPerYear = p.Tloan > 0 ? p.L_NPV / p.Tloan : 0;
+  for (let t = 0; t < years; t++) {
+    const Int = bal > 0 ? bal * p.iNPV : 0;
+    const Prin = t < io ? 0 : Math.min(bal, prinPerYear);
+    bal = Math.max(0, bal - Prin);
+    out.push({ Int, Prin, DS: Int + Prin });
+  }
+  return out;
+}
+
+/** The §15.8 redemption stream: the §12 company scaled to the launch ticket
+ *  (scale = G₁ / Σ I_§12 = 420k/750k = 0.56 as printed), redemptions landing
+ *  at the company's own years (coop years 3–4), operations held flat after
+ *  year 4, cumulative redemptions capped at κ·G₁. */
+export function buildScaledLaunchStream(
+  p: CoopParams,
+  years: number,
+  section12: { rows: { Red: number }[]; totalDeployed: number },
+  kappa: number,
+): number[] {
+  const scale = section12.totalDeployed > 0 ? p.G1 / section12.totalDeployed : 0;
+  const cap = kappa * p.G1;
+  const base = section12.rows.map((r) => r.Red * scale);
+  const flat = base[base.length - 1] ?? 0; // Y4 level, held flat
+  const out: number[] = [];
+  let cum = 0;
+  for (let t = 0; t < years; t++) {
+    const raw = t < base.length ? base[t] : flat;
+    const red = Math.max(0, Math.min(raw, cap - cum));
+    cum += red;
+    out.push(red);
+  }
+  return out;
+}
+
+export type DynamicFeasibility = {
+  /** Peak cumulative net pre-funding shortfall (framework eq. 23):
+   *  max_τ ( Σ_{t≤τ} (CoopOpex + DS_t − Π_t) )_+ . The positive part is
+   *  taken on the CUMULATIVE net position — a per-year positive-part sum
+   *  would be monotone in τ and could not equal the paper's printed €346k. */
+  maxShortfall: number;
+  peakYear: number;
+  buffer: number; // B_fund + (F_deploy − G₁)
+  feasible: boolean;
+  /** Shortfall left after also raiding the initial reserve E★₀ */
+  unfundedAfterReserve: number;
+};
+
+export function computeDynamicFeasibility(
+  p: CoopParams,
+  redemptionStream: number[],
+  years: number,
+): DynamicFeasibility {
+  const ds = scheduledDebtService(p, years);
+  const stack = computeLaunchStack(p);
+  const buffer = p.Bfund + (stack.Fdeploy - p.G1);
+  // eq. 23 windows to the redemption-ACTIVE years: "the buffer must cover
+  // the worst cumulative pre-redemption shortfall". The post-exhaustion
+  // drain ("thereafter: no income; opex drains the reserve", §15.8) is
+  // deliberately the cap-coverage condition's problem (eq. 24) — the paper
+  // states the two conditions separately because they pull in opposite
+  // directions.
+  let lastRedYear = -1;
+  for (let t = 0; t < years; t++) if ((redemptionStream[t] ?? 0) > 1e-6) lastRedYear = t;
+  const window = lastRedYear >= 0 ? lastRedYear : years - 1;
+  let cum = 0;
+  let maxShortfall = 0;
+  let peakYear = 0;
+  for (let t = 0; t <= window; t++) {
+    cum += p.coopOpex + p.coopTax + p.liabOther + ds[t].DS - (redemptionStream[t] ?? 0);
+    if (cum > maxShortfall) {
+      maxShortfall = cum;
+      peakYear = t;
+    }
+  }
+  maxShortfall = Math.max(0, maxShortfall);
+  return {
+    maxShortfall,
+    peakYear,
+    buffer,
+    feasible: buffer >= maxShortfall,
+    unfundedAfterReserve: Math.max(0, maxShortfall - buffer - p.E0_target),
+  };
+}
+
+export type CapCoverage = {
+  /** eq. 24 LHS: deployment-weighted redemption capacity κ̄·D_total */
+  capacity: number;
+  /** eq. 24 RHS: r·K_members + Σ(opex + DS) + E★ */
+  required: number;
+  ratio: number;
+  covered: boolean;
+  firstDistYear: number | null;
+  cumDistAtHorizon: number;
+  memberCapTotal: number; // Σ r·K
+  capsReached: boolean;
+  exhaustionYear: number | null; // year cumulative redemptions hit κ·G₁
+  redemptionDuration: number; // D_red = Σ t·Red_t / Σ Red_t
+};
+
+export function computeCapCoverage(
+  p: CoopParams,
+  redemptionStream: number[],
+  sim: CoopYearState[],
+  kappa: number,
+): CapCoverage {
+  const years = sim.length;
+  const ds = scheduledDebtService(p, years);
+  const capacity = kappa * p.G1; // single-company launch: κ̄ = κ, D_total = G₁
+  const opexAndDS = ds.reduce((s, d) => s + d.DS, 0) + years * (p.coopOpex + p.coopTax + p.liabOther);
+  const memberCapTotal = p.members.reduce((s, m) => s + m.rCap * m.K, 0);
+  const required = memberCapTotal + opexAndDS + p.E_target;
+  const firstDist = sim.find((r) => r.DistPool > 1e-6);
+  const cumDist = sim.reduce((s, r) => s + r.DistPool, 0);
+  let cum = 0;
+  let exhaustionYear: number | null = null;
+  for (let t = 0; t < redemptionStream.length; t++) {
+    cum += redemptionStream[t];
+    if (exhaustionYear === null && cum >= capacity - 1) exhaustionYear = t;
+  }
+  const sumRed = redemptionStream.reduce((s, x) => s + x, 0);
+  const redemptionDuration =
+    sumRed > 0 ? redemptionStream.reduce((s, x, t) => s + t * x, 0) / sumRed : 0;
+  return {
+    capacity,
+    required,
+    ratio: required > 0 ? capacity / required : Infinity,
+    covered: capacity >= required,
+    firstDistYear: firstDist ? firstDist.t : null,
+    cumDistAtHorizon: cumDist,
+    memberCapTotal,
+    capsReached: cumDist >= memberCapTotal - 1,
+    exhaustionYear,
+    redemptionDuration,
+  };
+}
+
+/** The corrected-launch preset (pack v3 IV.4; framework §15.5): fixes
+ *  liquidity, widens the cap-coverage gap — capacity falls to κ·G₁ = €560k. */
+export const CORRECTED_LAUNCH_PATCH: Partial<CoopParams> = {
+  G1: 280_000,
+  loanInterestOnlyYears: 5,
+  Tloan: 10,
 };
 
 export const fmtEURcompact = (x: number) => {

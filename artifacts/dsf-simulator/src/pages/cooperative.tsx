@@ -20,6 +20,10 @@ import {
 } from "@/lib/companyModel";
 import {
   LAUNCH_DEFAULTS,
+  CORRECTED_LAUNCH_PATCH,
+  buildScaledLaunchStream,
+  computeCapCoverage,
+  computeDynamicFeasibility,
   computeLaunchStack,
   simulateCooperative,
   type CoopParams,
@@ -53,17 +57,29 @@ export default function CooperativePage() {
     otherProceeds: [...LAUNCH_DEFAULTS.otherProceeds],
   }));
 
-  // Use the §12 illustrative single company as the redemption stream feeder.
+  // §15.8 end-to-end feeder: the §12 illustrative company SCALED to the
+  // launch ticket (scale = G₁/ΣI_§12), operations held flat after year 4,
+  // cumulative redemptions capped at κ·G₁ (pack v3 IV.3).
   const companySim = useMemo(() => simulateCompany(ILLUSTRATIVE_EXAMPLE), []);
   const redemptionStream = useMemo(
-    () => companySim.rows.map((r) => r.Red),
-    [companySim],
+    () => buildScaledLaunchStream(coop, coop.yearsToSim, companySim, ILLUSTRATIVE_EXAMPLE.kappa),
+    [coop, companySim],
   );
 
   const launch = useMemo(() => computeLaunchStack(coop), [coop]);
   const sim = useMemo(
     () => simulateCooperative(coop, redemptionStream),
     [coop, redemptionStream],
+  );
+  // Pack v3 IV.2 — dynamic feasibility (framework eq. 23)
+  const feasibility = useMemo(
+    () => computeDynamicFeasibility(coop, redemptionStream, coop.yearsToSim),
+    [coop, redemptionStream],
+  );
+  // Pack v3 IV.3 — cap coverage + time-to-cap (framework eq. 24 / §15.8)
+  const coverage = useMemo(
+    () => computeCapCoverage(coop, redemptionStream, sim, ILLUSTRATIVE_EXAMPLE.kappa),
+    [coop, redemptionStream, sim],
   );
 
   const patch = <K extends keyof CoopParams>(key: K, value: CoopParams[K]) => {
@@ -477,6 +493,57 @@ export default function CooperativePage() {
             The €420k headline ticket becomes only <span className="num text-finance">{fmtEURcompact(launch.Inet)}</span> of real
             operating capital once the company is moved into a steward-owned configuration.
           </p>
+
+          {/* Pack v3 IV.2 — dynamic feasibility (framework eq. 23) */}
+          <div
+            className={`mt-4 rounded-lg p-4 border ${feasibility.feasible ? "border-finance/30 bg-finance/5" : "border-destructive/30 bg-destructive/5"}`}
+            data-testid="dynamic-feasibility"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className={`text-sm font-semibold ${feasibility.feasible ? "text-finance" : "text-destructive"}`}>
+                Dynamic feasibility (eq. 23): {feasibility.feasible ? "FEASIBLE" : "INFEASIBLE"}
+              </p>
+              <button
+                onClick={() => setCoop((prev) => ({ ...prev, ...CORRECTED_LAUNCH_PATCH }))}
+                className="text-xs px-2.5 py-1.5 rounded border border-finance/40 text-finance hover-elevate"
+                data-testid="corrected-launch-preset"
+                title="Framework §15.5 verified solvent variant: G₁ = €280k, buffer €140k, NPV loan interest-only years 0–4, principal years 5–14"
+              >
+                Corrected-launch preset (§15.5)
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1.5 leading-snug">
+              Peak cumulative pre-redemption shortfall{" "}
+              <span className="num">{fmtEURcompact(feasibility.maxShortfall)}</span> (year {feasibility.peakYear}) vs
+              launch buffer <span className="num">{fmtEURcompact(feasibility.buffer)}</span>.
+              {!feasibility.feasible && (
+                <> Even raiding E★₀ leaves <span className="num text-destructive">{fmtEURcompact(feasibility.unfundedAfterReserve)}</span> unfunded — increase member capital, the loan, or the buffer.</>
+              )}
+              {feasibility.feasible && coop.loanInterestOnlyYears > 0 && (
+                <> Fixes liquidity, widens cap-coverage — capacity falls to {fmtEURcompact(coverage.capacity)}.</>
+              )}
+            </p>
+          </div>
+
+          {/* Pack v3 IV.3 — cap coverage + time-to-cap (framework eq. 24 / §15.8) */}
+          <div className="mt-3 rounded-lg p-4 border border-card-border bg-background/40" data-testid="cap-coverage">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+              <p className="text-sm font-semibold">Cap coverage &amp; time-to-cap (§15.8)</p>
+              <span className={`text-xs uppercase tracking-wider px-2 py-0.5 rounded ${coverage.covered ? "bg-finance/15 text-finance" : "bg-destructive/15 text-destructive"}`}>
+                {coverage.covered ? "covered" : `short ${fmtNum(1 / Math.max(coverage.ratio, 1e-9), 1)}×`}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div><span className="text-muted-foreground block">Capacity κ̄·D_total</span><span className="num">{fmtEURcompact(coverage.capacity)}</span></div>
+              <div><span className="text-muted-foreground block">Required (eq. 24)</span><span className="num">{fmtEURcompact(coverage.required)}</span></div>
+              <div><span className="text-muted-foreground block">First distribution</span><span className="num">{coverage.firstDistYear === null ? "not in horizon" : `year ${coverage.firstDistYear}`}</span></div>
+              <div><span className="text-muted-foreground block">Capacity exhausted</span><span className="num">{coverage.exhaustionYear === null ? "not in horizon" : `year ${coverage.exhaustionYear}`}</span></div>
+              <div><span className="text-muted-foreground block">Cum. distributions @ horizon</span><span className="num">{fmtEURcompact(coverage.cumDistAtHorizon)} of {fmtEURcompact(coverage.memberCapTotal)} ({fmtPct(coverage.cumDistAtHorizon / Math.max(coverage.memberCapTotal, 1))})</span></div>
+              <div><span className="text-muted-foreground block">Caps reached</span><span className="num">{coverage.capsReached ? "yes" : "no"}</span></div>
+              <div><span className="text-muted-foreground block">Redemption duration D_red</span><span className="num">{fmtNum(coverage.redemptionDuration, 1)} yrs</span></div>
+              <div><span className="text-muted-foreground block">Feeder</span><span className="num">§12 company × {fmtNum(coop.G1 / Math.max(companySim.totalDeployed, 1), 2)}</span></div>
+            </div>
+          </div>
         </div>
 
         {/* Members / vintages */}
