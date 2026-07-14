@@ -440,6 +440,10 @@ export type TheologyScenario = {
   rho: number;
   lambda: number;
   tendency: string;
+  /** LEGACY/reference only — the working paper's printed table value.
+   *  UI badges show the live computed I instead (Fix 2); early printings
+   *  (451/417/351/289/244) did not follow from the paper's own formulas
+   *  and were corrected in v2.5.9 to 448/400/335/277/234. */
   approxImpact: number;
   tone: "good" | "ok" | "warn" | "bad" | "very-bad";
 };
@@ -515,9 +519,15 @@ export const SCENARIO_BASE: Partial<DsfParams> = {
   beta: 0.15,
   gamma: 0.2,
   composeR: true,
-  stewardOwnership: true,
-  openSource: true,
-  euRetention: true,
+  // Structural guarantees are deliberately RELAXED in the theology
+  // scenarios so the U-coupling on openness (o) and sovereignty (d) is
+  // visible — with them true, computeAll forces o = 1 and d = 1 and two
+  // of the three coupling channels are bypassed.
+  // Acceptance (dsf_working defaults): I(A–E) = 448/400/335/277/234 (±1),
+  // M = 2.56 for all five (working paper v2.5.9 table).
+  stewardOwnership: false,
+  openSource: false,
+  euRetention: false,
 };
 
 export type WorkedExample = {

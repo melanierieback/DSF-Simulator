@@ -501,8 +501,10 @@ export default function TheologyPage() {
             <span className="num">2.90</span>
           </h3>
           <p className="text-xs text-muted-foreground mb-4">
-            All five preserve <Eq tex="M \approx 2.49\times" /> — the moral
-            character lives entirely in <Eq tex="U" /> and the impact it allows.
+            All five preserve <Eq tex="M \approx 2.56\times" /> — the moral
+            character lives entirely in <Eq tex="U" /> and the impact it
+            allows. Structural guarantees are relaxed in this illustration so
+            the U-coupling on openness and sovereignty is visible.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">

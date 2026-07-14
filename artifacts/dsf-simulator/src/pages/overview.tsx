@@ -11,9 +11,11 @@ import { ValueCard } from "@/components/dsf/ValueCard";
 import { SliderField } from "@/components/dsf/SliderField";
 import { Button } from "@/components/ui/button";
 import {
+  computeAll,
   fmtMultiple,
   fmtNum,
   fmtPct,
+  SCENARIO_BASE,
   THEOLOGY_SCENARIOS,
 } from "@/lib/dsfModel";
 import {
@@ -369,9 +371,11 @@ export default function OverviewPage() {
           </h3>
           <p className="text-xs text-muted-foreground mb-4">
             Five points on the licit ↔ usurious spectrum. All five hold{" "}
-            <Eq tex="r = 2.90" />, <Eq tex="M \approx 2.49\times" />, yet their
-            impact spreads from <span className="text-impact">~451</span> to{" "}
-            <span className="text-theology">~244</span>. Click to apply.
+            <Eq tex="r = 2.90" />, <Eq tex="M \approx 2.56\times" />, yet their
+            impact spreads from <span className="text-impact">~448</span> to{" "}
+            <span className="text-theology">~234</span>. Structural guarantees
+            are relaxed in this illustration so the U-coupling on openness and
+            sovereignty is visible. Click to apply.
           </p>
           <div className="space-y-1.5">
             {THEOLOGY_SCENARIOS.map((s) => (
@@ -388,7 +392,19 @@ export default function OverviewPage() {
                   {s.rho.toFixed(2)} · λ={s.lambda.toFixed(2)}
                 </div>
                 <div className="col-span-2 num text-xs text-impact text-right">
-                  I≈{s.approxImpact}
+                  {/* Live computed I — exactly what applying this scenario
+                      yields with the current store (Fix 2). */}
+                  I≈
+                  {Math.round(
+                    computeAll({
+                      ...params,
+                      ...SCENARIO_BASE,
+                      delta: s.delta,
+                      pi: s.pi,
+                      rho: s.rho,
+                      lambda: s.lambda,
+                    }).I,
+                  )}
                 </div>
                 <div className="col-span-1 text-right">
                   <ArrowRight className="w-4 h-4 inline-block text-muted-foreground" />
