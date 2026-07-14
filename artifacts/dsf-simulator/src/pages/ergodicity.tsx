@@ -11,8 +11,22 @@ import {
   type ErgoResult,
 } from "@/lib/ergodicityModel";
 import {
+  coinTossStats,
+  coinTossTrajectories,
+  coinTossPAhead,
+  fundKelly,
+  fundGOfF,
+  fundFStar,
+  coinGOfF,
+  poolingGn,
+  POOLING_LIMIT,
+  runBorrowerLender,
+} from "@/lib/ergodicityCore";
+import { computeR } from "@/lib/dsfModel";
+import {
   BarChart,
   Bar,
+  Cell,
   LineChart,
   Line,
   XAxis,
@@ -95,6 +109,8 @@ function ComparisonCard({
   color,
   survivalRate,
   medianSurviving,
+  p5Surviving,
+  p25Surviving,
   severeProbability,
   depletionProbability,
   note,
@@ -103,15 +119,20 @@ function ComparisonCard({
   color: string;
   survivalRate: string;
   medianSurviving: string;
+  p5Surviving?: string;
+  p25Surviving?: string;
   severeProbability: string;
   depletionProbability: string | null;
   note?: string;
 }) {
+  // Reporting standard (pack v2 II.5): median first, then P5/P25, then ruin
+  // probability; ensemble means labeled "ensemble mean", never shown alone.
   const rows: Array<[string, string]> = [
-    ["Effective survival rate", survivalRate],
     ["Median surviving companies", medianSurviving],
+    ["P5 / P25 surviving", p5Surviving && p25Surviving ? `${p5Surviving} / ${p25Surviving}` : "—"],
     ["Prob. severe downside", severeProbability],
     ["Reserve depletion prob.", depletionProbability ?? "—"],
+    ["Survival rate (ensemble mean)", survivalRate],
   ];
   return (
     <div
@@ -136,7 +157,7 @@ function ComparisonCard({
   );
 }
 
-export default function ErgodicityPage() {
+function SolidarityReserveTab() {
   const { params, set } = useDsf();
 
   const [ep, setEp] = useState<ErgoParams>(() => ({
@@ -293,6 +314,8 @@ export default function ErgodicityPage() {
           color="hsl(237 40% 65%)"
           survivalRate={pct(result.caseA.meanSurvivalRate)}
           medianSurviving={String(result.caseA.medianSurvivingCompanies)}
+          p5Surviving={String(result.caseA.p5SurvivingCompanies)}
+          p25Surviving={String(result.caseA.p25SurvivingCompanies)}
           severeProbability={pct(result.caseA.probSevereDownside)}
           depletionProbability={null}
           note="Baseline model — no solidarity pool."
@@ -302,6 +325,8 @@ export default function ErgodicityPage() {
           color={RESCUE}
           survivalRate={pct(result.caseB.meanSurvivalRate)}
           medianSurviving={String(result.caseB.medianSurvivingCompanies)}
+          p5Surviving={String(result.caseB.p5SurvivingCompanies)}
+          p25Surviving={String(result.caseB.p25SurvivingCompanies)}
           severeProbability={pct(result.caseB.probSevereDownside)}
           depletionProbability={pct(result.caseB.probReserveDepletion)}
           note="Solidarity reserve supports viable companies in shock."
@@ -439,25 +464,25 @@ export default function ErgodicityPage() {
               label="Survival uplift"
               value={result.survivalUplift >= 0 ? `+${pct(result.survivalUplift)}` : pct(result.survivalUplift)}
               channel="finance"
-              sub="Extra survival from pooled reserve"
+              sub="Ensemble-mean survival uplift from pooling"
             />
             <ValueCard
               label="Companies rescued"
               value={result.caseB.meanCompaniesRescued.toFixed(1)}
               channel="impact"
-              sub="Avg rescues per run"
+              sub="Rescues per run (ensemble mean)"
             />
             <ValueCard
               label="Repayments preserved"
               value={fmtCompact(result.repaymentsPreserved)}
               channel="finance"
-              sub="Additional mean repayments"
+              sub="Additional repayments (ensemble mean)"
             />
             <ValueCard
               label="Impact preserved"
               value={result.impactPreserved >= 0 ? `+${result.impactPreserved.toFixed(0)}` : result.impactPreserved.toFixed(0)}
               channel="impact"
-              sub="Extra impact units with pooling"
+              sub="Extra impact units (ensemble mean)"
             />
             <ValueCard
               label="Reserve depletion prob."
@@ -639,6 +664,373 @@ resilienceScore = 50
           </details>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Pack v2 Part II — True ergodicity module (paper §8)
+// ════════════════════════════════════════════════════════════════════════════
+
+function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+      <p className="text-[11px] uppercase tracking-wider text-white/45">{label}</p>
+      <p className="num text-xl font-semibold mt-1" style={{ color: accent ?? "white" }}>{value}</p>
+      {sub && <p className="text-[11px] text-white/40 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+// ── II.1 Two Averages ───────────────────────────────────────────────────────
+
+function TwoAveragesTab() {
+  const T = 100;
+  const { meanPerRound, g } = coinTossStats();
+  const data = useMemo(() => coinTossTrajectories(T), []);
+  const pAhead = useMemo(
+    () => [10, 100, 1000].map((t) => ({ t, p: coinTossPAhead(t) })),
+    [],
+  );
+  return (
+    <div className="space-y-6">
+      <InfoBox>
+        <p className="font-semibold text-white/85 mb-2">The two averages</p>
+        <p>
+          A coin pays +50% on heads, −40% on tails. The <em>ensemble</em> average return is
+          +5% per round — a great bet, on average. But no one lives in the ensemble: each
+          player follows one path through time, and the <em>time-average</em> growth rate is
+          ½ln(1.5·0.6) = −5.3% per round. The gamble that enriches the average player ruins
+          almost every actual player. This distinction — ensemble vs time average — is the
+          whole module.
+        </p>
+      </InfoBox>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Ensemble mean ⟨f⟩" value={`${meanPerRound.toFixed(2)}×/round`} sub="looks like a winning game" />
+        <StatCard label="Time-average g" value={`${(g * 100).toFixed(2)}%/round`} sub="what one path actually compounds at" accent="hsl(0 70% 65%)" />
+        <StatCard label="Ensemble mean at T=100" value={`${data[100].mean.toFixed(1)}×`} sub="ensemble mean — no one gets this" />
+        <StatCard label="Median at T=100" value={`${data[100].median.toFixed(3)}×`} sub="the typical player" accent="hsl(0 70% 65%)" />
+      </div>
+      <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+        <SectionTitle>Ensemble mean vs median path (log scale)</SectionTitle>
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(237 22% 14%)" />
+            <XAxis dataKey="t" tick={{ fontSize: 10, fill: "hsl(237 22% 55%)" }} label={{ value: "round", position: "insideBottom", offset: -2, fontSize: 10, fill: "hsl(237 22% 55%)" }} />
+            <YAxis scale="log" domain={[0.0001, 1000]} tickFormatter={(v) => (v >= 1 ? `${v}×` : `${v}×`)} tick={{ fontSize: 10, fill: "hsl(237 22% 55%)" }} width={56} />
+            <RTooltip contentStyle={{ background: "hsl(237 30% 9%)", border: "1px solid hsl(237 22% 22%)", fontSize: 12 }} formatter={(v: number, name: string) => [v.toExponential(2), name]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <ReferenceLine y={1} stroke="hsl(237 22% 40%)" strokeDasharray="3 3" />
+            <Line dataKey="mean" name="ensemble mean ⟨V⟩" stroke={POOLED} strokeWidth={2} dot={false} />
+            <Line dataKey="median" name="median path" stroke="hsl(0 70% 60%)" strokeWidth={2} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {pAhead.map(({ t, p }) => (
+          <StatCard key={t} label={`P(ahead) at T = ${t}`} value={`${(p * 100).toFixed(p < 0.001 ? 3 : 1)}%`} sub="exact binomial — chance a player is above 1×" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── II.2 Fund Kelly ─────────────────────────────────────────────────────────
+
+function FundKellyTab() {
+  const { params } = useDsf();
+  const r = computeR(params);
+  const N = params.N, p = params.p, k = params.k, eta = params.eta;
+  const fk = useMemo(() => fundKelly(N, p, k, r, Math.max(eta, 1e-9)), [N, p, k, r, eta]);
+  const stakeCurve = useMemo(() => {
+    const rows: { f: number; fund: number; coin: number }[] = [];
+    for (let i = 0; i <= 100; i++) {
+      const f = i / 100;
+      rows.push({ f, fund: fundGOfF(N, p, k, r, 1, f) * 100, coin: coinGOfF(f) * 100 });
+    }
+    return rows;
+  }, [N, p, k, r]);
+  const fStar = useMemo(() => fundFStar(N, p, k, r, 1), [N, p, k, r]);
+  const dragTable = useMemo(
+    () => [10, 25, 40, 100, 400].map((n) => ({ n, drag: fundKelly(n, p, k, r, 1).drag })),
+    [p, k, r],
+  );
+  const evergreen = useMemo(() => {
+    const rows: { c: number; reported: number; typical: number }[] = [];
+    for (let c = 1; c <= Math.max(3, params.c); c++) {
+      rows.push({ c, reported: Math.pow(fk.M, c), typical: Math.exp(fk.ElnMcond * c) });
+    }
+    return rows;
+  }, [fk, params.c]);
+
+  return (
+    <div className="space-y-6">
+      <InfoBox>
+        <p className="font-semibold text-white/85 mb-2">The fund&apos;s own time-average growth</p>
+        <p>
+          The reported multiple M uses the expected survivor count. But each cycle realizes a
+          random survivor count Ŝ ~ Bin(N, p), and the fund compounds through the <em>realized</em>{" "}
+          multiple M̂ = rkŜ/(N+(k−1)Ŝ). Volatility drag = ln M − E[ln M̂] is the gap between the
+          brochure and the path. Diversification (N) is what closes it — that is the Kelly-side
+          argument for portfolio breadth.
+        </p>
+      </InfoBox>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Reported M (live params)" value={`${fk.M.toFixed(3)}×`} sub={`ln M = ${fk.lnM.toFixed(4)}`} />
+        <StatCard label="E[ln M̂ | Ŝ≥1]" value={fk.ElnMcond.toFixed(4)} sub={`typical factor ${fk.typicalFactor.toFixed(3)}×`} accent={RESCUE} />
+        <StatCard label="Volatility drag" value={fk.drag.toFixed(4)} sub="ln M − E[ln M̂ | Ŝ≥1]" accent="hsl(38 85% 62%)" />
+        <StatCard label="P(all fail)" value={fk.pAllFail.toExponential(1)} sub={`(1−p)^N at N=${N}`} />
+      </div>
+      <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+        <SectionTitle>Stake-fraction curve g(f) — fund vs coin-toss reference</SectionTitle>
+        <p className="text-xs text-white/45 mb-3">
+          g(f) = E[ln((1−f) + f·M̂)] — the time-average growth of deploying fraction f each cycle
+          (η = 1 reference). Fund f★ = {fStar.fStar.toFixed(2)} at g = {(fStar.gStar * 100).toFixed(2)}%;
+          coin-toss f★ = 0.25 at +0.62%/round, g(0.5) = 0, g(1) = −5.27%.
+        </p>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={stakeCurve} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(237 22% 14%)" />
+            <XAxis dataKey="f" tick={{ fontSize: 10, fill: "hsl(237 22% 55%)" }} tickFormatter={(v) => v.toFixed(2)} label={{ value: "deployment fraction f", position: "insideBottom", offset: -2, fontSize: 10, fill: "hsl(237 22% 55%)" }} />
+            <YAxis tick={{ fontSize: 10, fill: "hsl(237 22% 55%)" }} tickFormatter={(v) => `${v.toFixed(0)}%`} width={44} label={{ value: "g (%/cycle)", angle: -90, position: "insideLeft", fontSize: 10, fill: "hsl(237 22% 55%)" }} />
+            <RTooltip contentStyle={{ background: "hsl(237 30% 9%)", border: "1px solid hsl(237 22% 22%)", fontSize: 12 }} formatter={(v: number, name: string) => [`${v.toFixed(2)}%`, name]} labelFormatter={(f) => `f = ${f}`} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <ReferenceLine y={0} stroke="hsl(237 22% 40%)" strokeDasharray="3 3" />
+            <ReferenceLine x={fStar.fStar} stroke={RESCUE} strokeDasharray="4 3" label={{ value: `f★ = ${fStar.fStar.toFixed(2)}`, fontSize: 10, fill: RESCUE, position: "top" }} />
+            <Line dataKey="fund" name="fund g(f)" stroke={RESCUE} strokeWidth={2} dot={false} />
+            <Line dataKey="coin" name="coin-toss reference" stroke="hsl(237 40% 60%)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+          <SectionTitle>Drag vs portfolio size (p, k, r live)</SectionTitle>
+          <table className="w-full text-xs">
+            <thead><tr className="text-white/40 uppercase tracking-wider text-[10px]"><th className="text-left py-1">N</th><th className="text-right">volatility drag</th></tr></thead>
+            <tbody>
+              {dragTable.map(({ n, drag }) => (
+                <tr key={n} className="border-t" style={{ borderColor: "hsl(237 22% 14%)" }}>
+                  <td className="py-1.5 num">{n}</td>
+                  <td className="py-1.5 num text-right" style={{ color: n === N ? RESCUE : undefined }}>{drag.toFixed(4)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[11px] text-white/40 mt-2">Acceptance at p=0.4, k=5, r=3: 0.0549 / 0.0211 / 0.0125 / 0.0048 / 0.0012.</p>
+        </div>
+        <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+          <SectionTitle>The honest evergreen line</SectionTitle>
+          <p className="text-xs text-white/45 mb-2">Reported Mᶜ vs typical e^(E[ln M̂]·c). At c=3, N=25, p=0.4, r=3: 12.29× vs ≈11.5×.</p>
+          <table className="w-full text-xs">
+            <thead><tr className="text-white/40 uppercase tracking-wider text-[10px]"><th className="text-left py-1">c</th><th className="text-right">reported Mᶜ</th><th className="text-right">typical e^(gc)</th></tr></thead>
+            <tbody>
+              {evergreen.map(({ c, reported, typical }) => (
+                <tr key={c} className="border-t" style={{ borderColor: "hsl(237 22% 14%)" }}>
+                  <td className="py-1.5 num">{c}</td>
+                  <td className="py-1.5 num text-right">{reported.toFixed(2)}×</td>
+                  <td className="py-1.5 num text-right" style={{ color: RESCUE }}>{typical.toFixed(2)}×</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── II.3 Pooling — the cooperation theorem ──────────────────────────────────
+
+const POOLING_NS = [1, 2, 5, 10, 25, 100];
+
+function PoolingTab() {
+  const rows = useMemo(
+    () => POOLING_NS.map((n) => ({ n: String(n), g: poolingGn(n) * 100 })),
+    [],
+  );
+  return (
+    <div className="space-y-6">
+      <div
+        className="rounded-xl p-4 text-sm font-semibold"
+        style={{ background: "hsl(142 55% 14%)", border: "1px solid hsl(142 50% 30%)", color: "hsl(142 70% 70%)" }}
+      >
+        Five sharers turn a losing game into a winning one.
+      </div>
+      <InfoBox>
+        <p className="font-semibold text-white/85 mb-2">The cooperation theorem</p>
+        <p>
+          n players each toss the same coin and pool outcomes equally: each receives
+          0.6 + 0.9·U/n where U ~ Bin(n, ½). Alone (n = 1) the time average is −5.27%/round.
+          Two sharers nearly break even. Five turn it positive. As n grows, the time average
+          approaches the ensemble mean ln(1.05) = +4.88% — pooling is how a group gets to
+          <em> live in</em> the ensemble average that no individual path can reach.
+        </p>
+        <p className="mt-3 text-white/55 italic">
+          DSF runs this theorem at three layers (paper §8.6): the portfolio pools company
+          outcomes into one fund path; open-ended vintages pool across time so no cohort rides
+          one cycle alone; and the solidarity reserve pools rescue capacity against
+          path-killing shocks. Same mathematics each time: share the multiplicative risk,
+          keep the time average.
+        </p>
+      </InfoBox>
+      <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+        <SectionTitle>Time-average growth g_n vs number of sharers (exact binomial)</SectionTitle>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(237 22% 14%)" vertical={false} />
+            <XAxis dataKey="n" tick={{ fontSize: 11, fill: "hsl(237 22% 55%)" }} label={{ value: "sharers n", position: "insideBottom", offset: -2, fontSize: 10, fill: "hsl(237 22% 55%)" }} />
+            <YAxis tick={{ fontSize: 10, fill: "hsl(237 22% 55%)" }} tickFormatter={(v) => `${v.toFixed(0)}%`} width={44} />
+            <RTooltip contentStyle={{ background: "hsl(237 30% 9%)", border: "1px solid hsl(237 22% 22%)", fontSize: 12 }} formatter={(v: number) => [`${v.toFixed(2)}%/round`, "g_n"]} labelFormatter={(n) => `n = ${n}`} />
+            <ReferenceLine y={0} stroke="hsl(0 60% 55%)" strokeDasharray="3 3" />
+            <ReferenceLine y={POOLING_LIMIT * 100} stroke={POOLED} strokeDasharray="4 3" label={{ value: "limit ln(1.05) = +4.88%", fontSize: 10, fill: POOLED, position: "insideTopRight" }} />
+            <Bar dataKey="g" radius={[3, 3, 0, 0]}>
+              {rows.map((row, i) => (
+                <Cell key={i} fill={row.g >= 0 ? "hsl(142 55% 45%)" : "hsl(0 60% 50%)"} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+        <p className="text-[11px] text-white/40 mt-2">
+          Acceptance: −5.27 / −0.20 / +2.95 / +3.94 / +4.51 / +4.79 (%/round), limit +4.88%.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── II.4 Borrower & Lender — delivers φ_dyn ─────────────────────────────────
+
+function BorrowerLenderTab() {
+  const { params } = useDsf();
+  const [highPrecision, setHighPrecision] = useState(false);
+  const paths = highPrecision ? 100_000 : 20_000;
+  const bl = useMemo(() => runBorrowerLender(paths, 20260702), [paths]);
+  const phiState = params.phi;
+
+  const fmtP = (v: number) => `${(v * 100).toFixed(1)}%`;
+  const rows: [string, string, string][] = [
+    ["Borrower ruined", fmtP(bl.A.ruined), fmtP(bl.B.ruined)],
+    ["Fully repaid", fmtP(bl.A.fullyRepaid), fmtP(bl.B.fullyRepaid)],
+    ["Median years to repay", String(bl.A.medianYearsToRepay ?? "—"), String(bl.B.medianYearsToRepay ?? "—")],
+    ["Median V₂₅ (ruined = 0)", bl.A.medianV.toFixed(2), bl.B.medianV.toFixed(2)],
+    ["Median-path growth", `${(bl.A.medianPathGrowth * 100).toFixed(1)}%/yr`, `${(bl.B.medianPathGrowth * 100).toFixed(1)}%/yr`],
+    ["Lender collects (mean)", bl.A.lenderCollects.toFixed(3), bl.B.lenderCollects.toFixed(3)],
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div
+        className="rounded-xl p-4 text-sm font-semibold"
+        style={{ background: "hsl(142 55% 14%)", border: "1px solid hsl(142 50% 30%)", color: "hsl(142 70% 70%)" }}
+      >
+        Same lender collection ({bl.A.lenderCollects.toFixed(3)} vs {bl.B.lenderCollects.toFixed(3)}); ruin {fmtP(bl.A.ruined)} → {fmtP(bl.B.ruined)}.
+      </div>
+      <InfoBox>
+        <p className="font-semibold text-white/85 mb-2">Fixed schedule vs conditional sharing</p>
+        <p>
+          A borrower (V₀ = 1, ×1.5 or ×0.75 each year) owes Ω = 0.8. Contract A demands 0.10
+          every year — miss a payment and the company is gone. Contract B (the DSF shape) takes
+          30% of up-year gains and nothing in down years. Over {bl.paths.toLocaleString()} seeded
+          paths the lender collects the same either way — but A ruins a quarter of borrowers
+          while B ruins none. The fixed claim, not the amount, is what kills.
+        </p>
+      </InfoBox>
+      <div className="rounded-xl p-5" style={{ background: "hsl(237 28% 7%)", border: "1px solid hsl(237 22% 16%)" }}>
+        <div className="flex items-center justify-between mb-3">
+          <SectionTitle>A (fixed schedule) vs B (conditional, DSF)</SectionTitle>
+          <label className="flex items-center gap-2 text-xs text-white/50 cursor-pointer">
+            <input type="checkbox" checked={highPrecision} onChange={(e) => setHighPrecision(e.target.checked)} />
+            high precision (10⁵ paths)
+          </label>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wider text-white/40">
+              <th className="text-left py-2">metric</th>
+              <th className="text-right py-2">A — fixed</th>
+              <th className="text-right py-2" style={{ color: RESCUE }}>B — conditional (DSF)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, a, b]) => (
+              <tr key={label} className="border-t" style={{ borderColor: "hsl(237 22% 14%)" }}>
+                <td className="py-2 text-white/70">{label}</td>
+                <td className="py-2 num text-right">{a}</td>
+                <td className="py-2 num text-right" style={{ color: RESCUE }}>{b}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="text-[11px] text-white/40 mt-2">
+          Free-company benchmark: median V₂₅ = {bl.freeMedianV.toFixed(2)} (g_med {(bl.freeMedianGrowth * 100).toFixed(1)}%/yr).
+          Seeded MC (mulberry32, seed {bl.seed}); acceptance tolerance ±0.5pp at 10⁵ paths.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <StatCard label="Δg_A (fixed-claim drag)" value={`${(bl.dgA * 100).toFixed(1)}pp/yr`} sub="free growth minus contract-A growth" />
+        <StatCard label="Δg_B (DSF drag)" value={`${(bl.dgB * 100).toFixed(1)}pp/yr`} sub="free growth minus contract-B growth" />
+        <StatCard label="φ_dyn = 1 − Δg_B/Δg_A" value={bl.phiDyn.toFixed(2)} sub={`vs φ_state = ${phiState.toFixed(2)} (theology rail)`} accent={RESCUE} />
+      </div>
+      <InfoBox>
+        <p className="text-white/55">
+          <strong className="text-white/75">φ_state vs φ_dyn (paper §8.7):</strong> φ_state
+          classifies the <em>form</em> of the claim — the Naviganti test — and is what feeds the
+          usury pressure U. φ_dyn prices <em>all</em> growth drag, including licit sharing, so it
+          is shown for transparency only and never enters U. A contract can be formally contingent
+          (high φ_state) and still carry real drag (φ_dyn &lt; 1) — that gap is the honest price
+          of the capital.
+        </p>
+      </InfoBox>
+    </div>
+  );
+}
+
+// ── Page shell with tabs ────────────────────────────────────────────────────
+
+const ERGO_TABS = [
+  { key: "two-averages", label: "Two Averages" },
+  { key: "fund-kelly", label: "Fund Kelly" },
+  { key: "pooling", label: "Pooling" },
+  { key: "borrower-lender", label: "Borrower & Lender" },
+  { key: "solidarity", label: "Solidarity Reserve" },
+] as const;
+
+type ErgoTabKey = (typeof ERGO_TABS)[number]["key"];
+
+export default function ErgodicityPage() {
+  const [tab, setTab] = useState<ErgoTabKey>("two-averages");
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h1 className="text-2xl font-bold text-white">Ergodicity Lab</h1>
+        <p className="text-sm text-white/60 max-w-3xl">
+          Time-average growth rates, log-wealth trajectories, Kelly stakes, the cooperation
+          theorem, and the borrower&apos;s-eye view (paper §8) — plus the operational Solidarity
+          Reserve rescue simulation. Medians first; ensemble means are labeled as such.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {ERGO_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            data-testid={`ergo-tab-${t.key}`}
+            className="px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all"
+            style={
+              tab === t.key
+                ? { background: "hsl(235 60% 30%)", color: "white", border: "1px solid hsl(235 70% 50%)" }
+                : { background: "hsl(237 22% 11%)", color: "hsl(237 40% 60%)", border: "1px solid hsl(237 22% 19%)" }
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "two-averages" && <TwoAveragesTab />}
+      {tab === "fund-kelly" && <FundKellyTab />}
+      {tab === "pooling" && <PoolingTab />}
+      {tab === "borrower-lender" && <BorrowerLenderTab />}
+      {tab === "solidarity" && <SolidarityReserveTab />}
     </div>
   );
 }

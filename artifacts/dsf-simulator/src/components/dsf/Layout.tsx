@@ -179,7 +179,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <span className="w-px h-3.5 mx-1 shrink-0" style={{ background: "hsl(235 40% 40% / 0.4)" }} />
                 <NavLink href="/legal"     label="Legal"          active={location === "/legal"} />
                 <span className="w-px h-3.5 mx-1 shrink-0" style={{ background: "hsl(235 40% 40% / 0.4)" }} />
-                <NavLink href="/ergodicity" label="Solidarity Reserve Lab" active={location === "/ergodicity"} highlight />
+                <NavLink href="/ergodicity" label="Ergodicity Lab" active={location === "/ergodicity"} highlight />
               </nav>
             </div>
 

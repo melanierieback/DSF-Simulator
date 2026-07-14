@@ -294,6 +294,13 @@ export default function UnifiedPage() {
             sub={`licit ${fmtPct((1 + params.delta + params.pi) / Math.max(derived.r, 0.001))} · usury ${fmtPct((params.rho + params.lambda) / Math.max(derived.r, 0.001))}`} />
           <ValueCard label="Survivors" symbol="S" value={`${derived.S} / ${params.N}`} channel="impact" size="md"
             sub={`p = ${fmtPct(params.p)}`} />
+          {/* Covenant line (pack v2 II.5; paper §8.5) */}
+          <div className="md:col-span-3 rounded-lg border border-theology/25 bg-theology/5 px-4 py-2.5">
+            <p className="text-xs text-theology leading-snug">
+              <span className="font-semibold">Covenant:</span> no design change is licit that
+              improves the mean by thickening the ruin tail.
+            </p>
+          </div>
         </div>
 
         {/* Radar profile */}
