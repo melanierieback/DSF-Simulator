@@ -145,7 +145,7 @@ export default function UnifiedPage() {
     const r = 1 + s.delta + s.pi + s.rho + s.lambda;
     const M = computeM(r, 5, 0.6);
     const U = computeU(s.rho, s.lambda);
-    const T = computeT(U, params.mu, params.eta);
+    const T = computeT(U, params.mu, params.eta, params.Umax);
     const L = computeLU(8, params.alpha, U);
     const o = computeOU(1, params.beta, U, true);
     const d = computeDU(1, params.gamma, U, true);

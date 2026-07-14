@@ -44,9 +44,46 @@ export type DsfParams = {
    *  Used in computeAll when includeErgodicityInResults is true. */
   ergodicEffectiveSurvivalRate: number;
   /** Theological mode for computing usury pressure U and the licit/usury M split.
-   *  Key must match one of THEOLOGICAL_MODES. Defaults to "dsf_working" (the original
-   *  0.5·ρ + λ formula). Unknown or absent keys fall back to "dsf_working" silently. */
+   *  Canonical keys: aquinas_unified | olivi | salamanca_late. Legacy keys
+   *  (dsf_working, aquinas_mutuum, aquinas_societas, salamanca) are accepted
+   *  as ALIASES for URL back-compat and resolve via resolveTheologicalMode().
+   *  Default "aquinas_unified" with phi = 0.5 reproduces every legacy
+   *  dsf_working number exactly. */
   theologicalMode: string;
+  // ── Pack v2 Part I — generalized theology layer (paper §§4.5–4.11) ──
+  /** Claim contingency ∈ [0,1]; 0.5 = legacy baseline (exact backward compat).
+   *  φ_state is the OPERATIVE φ (founder decision, 2 Jul 2026); the dynamic
+   *  φ_dyn from the ergodicity module is display-only. */
+  phi: number;
+  /** Substantiation of δ ∈ [0,1] (unsubstantiated share flows into D) */
+  psiDelta: number;
+  /** Substantiation of π ∈ [0,1] */
+  psiPi: number;
+  /** Substantiation of ρ ∈ [0,1] */
+  psiRho: number;
+  /** Substantiation of λ ∈ [0,1] */
+  psiLambda: number;
+  /** Licitness gate for T (founder decision, 2 Jul 2026): U > Umax ⇒ T = 0 */
+  Umax: number;
+  // verdict-layer inputs (paper §§4.8–4.10):
+  /** Olivi committed-capital threshold on φ */
+  phiMin: number;
+  /** Time-average growth of the counterfactual (operative Λ_time) */
+  gAlt: number;
+  /** Ensemble mean of the counterfactual (comparison Λ_ens) */
+  yAlt: number;
+  /** Horizon for Λ and the Salamanca band (default = yearsPerCycle) */
+  TLambda: number;
+  /** Salamanca just rate */
+  rStar: number;
+  /** Salamanca band tolerance */
+  epsBand: number;
+  /** Screen: no pricing against borrower's necessity */
+  screenNecessity: boolean;
+  /** Screen: no market power */
+  screenMarketPower: boolean;
+  /** Substantiation screen threshold: min(ψ_i) ≥ psiMin */
+  psiMin: number;
 };
 
 export const DEFAULTS: DsfParams = {
@@ -89,7 +126,24 @@ export const DEFAULTS: DsfParams = {
   dLP: 0.5,
   includeErgodicityInResults: false,
   ergodicEffectiveSurvivalRate: 0.4,
-  theologicalMode: "dsf_working",
+  theologicalMode: "aquinas_unified",
+  // Pack v2 I.1 — generalized theology layer defaults (all values from the
+  // pack spec, verified against paper v2.8.2 on 2 Jul 2026):
+  phi: 0.5, // legacy baseline: aquinas_unified @ φ=0.5 ≡ old dsf_working
+  psiDelta: 1.0,
+  psiPi: 1.0,
+  psiRho: 1.0,
+  psiLambda: 1.0,
+  Umax: 0.8,
+  phiMin: 0.6,
+  gAlt: 0.04,
+  yAlt: 0.05,
+  TLambda: 10, // = yearsPerCycle default
+  rStar: 0.05,
+  epsBand: 0.02,
+  screenNecessity: true,
+  screenMarketPower: true,
+  psiMin: 0.8,
 };
 
 export const clamp = (x: number, lo = 0, hi = Infinity) =>
@@ -131,11 +185,9 @@ export const computeU = (rho: number, lambda: number) => 0.5 * rho + lambda;
 // All four weights are retained in the structure for extensibility.
 
 export type TheologicalModeKey =
-  | "dsf_working"
-  | "aquinas_mutuum"
-  | "aquinas_societas"
+  | "aquinas_unified"
   | "olivi"
-  | "salamanca";
+  | "salamanca_late";
 
 export type TheologicalModeConfig = {
   key: TheologicalModeKey;
@@ -144,67 +196,90 @@ export type TheologicalModeConfig = {
   wPi: number;
   wRho: number;
   wLambda: number;
+  /** Scholarly uncertainty range on w_ρ (endpoints drive the displayed U-band) */
+  rangeRho?: [number, number];
+  /** Scholarly uncertainty range on w_λ */
+  rangeLambda?: [number, number];
   rationale: string;
   source: string;
 };
 
 export const THEOLOGICAL_MODES: TheologicalModeConfig[] = [
   {
-    key: "dsf_working",
-    label: "DSF working baseline",
-    wDelta: 0, wPi: 0, wRho: 0.50, wLambda: 1.00,
-    rationale: "U = 0.5·ρ + λ. Strict on lucrum cessans, half-penalizes risk-pricing. An Aquinas-leaning hybrid that does not yet fully credit the equity / societas structure.",
-    source: "DSF working paper baseline. The ½ weight on ρ reflects partial legitimation of periculum sortis without yet distinguishing mutuum from societas.",
-  },
-  {
-    key: "aquinas_mutuum",
-    label: "Aquinas — loan (mutuum)",
-    wDelta: 0, wPi: 0, wRho: 1.00, wLambda: 1.00,
-    rationale: "Strict loan-bound reading. Lucrum cessans refused; in a loan the lender bears no real risk to principal, so pricing risk is illicit too. This is not DSF's actual instrument.",
-    source: "Aquinas, Summa Theologiae II-II q.78: damnum emergens admitted; lucrum cessans refused; a return is licit only where the capital provider shares the venture's risk as a partner.",
-  },
-  {
-    key: "aquinas_societas",
-    label: "Aquinas — partnership (societas)",
-    wDelta: 0, wPi: 0, wRho: 0.00, wLambda: 1.00,
-    rationale: "Instrument-aware Thomistic reading. Genuine risk-bearing in a partnership legitimates a profit share; periculum sortis (ρ) is licit as actually borne. Lucrum cessans still refused.",
-    source: "Aquinas, Summa Theologiae II-II q.78: a return is licit where the capital provider shares the venture's risk as a partner rather than receiving a guaranteed return as a lender.",
+    key: "aquinas_unified",
+    label: "Aquinas (unified)",
+    wDelta: 0, wPi: 0, wRho: 1.0, wLambda: 1.0,
+    rationale: "φ-aware Thomistic test spanning the old mutuum/societas poles: at φ = 0 (fully non-contingent claim) it is the strict loan reading; at φ = 1 (fully contingent) genuine partnership risk-bearing legitimates the ρ claim. φ = 0.5 reproduces the old DSF working baseline exactly.",
+    source: "Aquinas, Summa Theologiae II-II q.78: damnum emergens admitted; lucrum cessans refused; a return is licit where the capital provider shares the venture's risk as a partner rather than receiving a guaranteed return as a lender.",
   },
   {
     key: "olivi",
     label: "Olivi — committed capital",
     wDelta: 0, wPi: 0, wRho: 0.25, wLambda: 0.50,
+    rangeRho: [0.2, 0.4],
+    rangeLambda: [0.4, 0.6],
     rationale: "Capital genuinely committed to productive use has a profit-bearing quality; lucrum cessans accepted conditionally. Intermediate between Thomistic and Salamanca positions.",
     source: "Peter John Olivi, Tractatus de contractibus: capital committed to productive trade has a profit-bearing quality; risk and productive commitment give rise to legitimate interesse.",
   },
   {
-    key: "salamanca",
-    label: "School of Salamanca",
+    key: "salamanca_late",
+    label: "Salamanca & late scholastics",
     wDelta: 0, wPi: 0, wRho: 0.15, wLambda: 0.25,
-    rationale: "Molina, Lessius, and de Lugo progressively legitimate lucrum cessans and periculum sortis when priced according to common estimation and real market conditions. Most permissive.",
-    source: "School of Salamanca (Molina, Lessius, de Lugo): lucrum cessans and periculum sortis progressively recognized when grounded in real conditions and common estimation. TODO: fuller bibliography.",
+    rangeRho: [0.1, 0.3],
+    rangeLambda: [0.2, 0.4],
+    rationale: "Progressive legitimation of lucrum cessans and periculum sortis when priced by common estimation and real market conditions. Most permissive row; may split into Salamanca proper vs late scholastics after the primary-source pass.",
+    source: "Salamanca proper: Vitoria, de Soto, Azpilcueta (Comentario resolutorio de usuras, 1556), Mercado. Late scholastics: Molina (1593), Lessius (1605), de Lugo (1642).",
   },
 ];
 
-/** Returns the config for a given theological mode key.
- *  Falls back silently to 'dsf_working' for unknown or absent keys. */
-export function getTheologicalModeConfig(key: string): TheologicalModeConfig {
-  return THEOLOGICAL_MODES.find((m) => m.key === key) ?? THEOLOGICAL_MODES[0];
+/** Legacy mode keys accepted as aliases so old shared URLs never break
+ *  (pack v2 I.2). aquinas_mutuum/societas force φ to their pole. */
+export const THEOLOGICAL_MODE_ALIASES: Record<
+  string,
+  { mode: TheologicalModeKey; forcePhi?: number }
+> = {
+  dsf_working: { mode: "aquinas_unified" }, // leave phi as-is (default 0.5)
+  aquinas_mutuum: { mode: "aquinas_unified", forcePhi: 0 },
+  aquinas_societas: { mode: "aquinas_unified", forcePhi: 1 },
+  salamanca: { mode: "salamanca_late" },
+};
+
+/** Resolve any mode key (canonical or legacy alias) to its config plus the
+ *  effective φ. Unknown keys fall back to aquinas_unified silently. */
+export function resolveTheologicalMode(
+  key: string,
+  phi: number,
+): { config: TheologicalModeConfig; phi: number } {
+  const alias = THEOLOGICAL_MODE_ALIASES[key];
+  const canonical = alias ? alias.mode : key;
+  const config =
+    THEOLOGICAL_MODES.find((m) => m.key === canonical) ?? THEOLOGICAL_MODES[0];
+  return { config, phi: alias?.forcePhi ?? phi };
 }
 
-/** Mode-aware usury pressure.
- *  U(mode) = w_delta·δ + w_pi·π + w_rho·ρ + w_lambda·λ
+/** Returns the config for a given theological mode key (alias-aware).
+ *  Falls back silently to 'aquinas_unified' for unknown or absent keys. */
+export function getTheologicalModeConfig(key: string): TheologicalModeConfig {
+  return resolveTheologicalMode(key, 0).config;
+}
+
+/** Generalized mode-aware usury pressure (pack v2 I.3, paper §4.6).
  *
- *  Acceptance values (δ=0.9, π=0.2, ρ=0.5, λ=0.3, r=2.90):
- *    dsf_working      → 0.55   (0.50×0.5 + 1.00×0.3 = 0.55 ✓)
- *    aquinas_mutuum   → 0.80   (1.00×0.5 + 1.00×0.3 = 0.80 ✓)
- *    aquinas_societas → 0.30   (0.00×0.5 + 1.00×0.3 = 0.30 ✓)
- *    olivi            → 0.275  (0.25×0.5 + 0.50×0.3 = 0.275 ✓)
- *    salamanca        → 0.15   (0.15×0.5 + 0.25×0.3 = 0.15 ✓)
+ *  D = (1−ψ_δ)δ + (1−ψ_π)π + (1−ψ_ρ)ρ + (1−ψ_λ)λ   (unsubstantiated claim)
+ *  U = w_ρ·(1−φ)·(ψ_ρ·ρ) + w_λ·(ψ_λ·λ + D)
+ *  (w_δ = w_π = 0 across modes; enforcement lives in ψ.)
  *
- *  DSF target cap (δ=1.5, π=0.1, ρ=0.4, λ=0):
- *    dsf_working      → 0.20   (0.50×0.4 + 0 = 0.20 ✓)
- *    aquinas_societas → 0.00   (0.00×0.4 + 0 = 0.00 ✓)
+ *  φ_state (params.phi) is the OPERATIVE φ; φ_dyn from the ergodicity module
+ *  is display-only and never feeds U.
+ *
+ *  Acceptance (δ=0.9, π=0.2, ρ=0.5, λ=0.3, ψ≡1) — verified 2 Jul 2026:
+ *    φ=0.0 → aquinas_unified 0.8000 (= old mutuum) · olivi 0.2750 · salamanca_late 0.1500
+ *    φ=0.5 → aquinas_unified 0.5500 (= old dsf_working) · olivi 0.2125 · salamanca_late 0.1125
+ *    φ=0.9 → 0.3500 · 0.1625 · 0.0825
+ *    φ=1.0 → aquinas_unified 0.3000 (= old societas) · olivi 0.1500 · salamanca_late 0.0750
+ *  With ψ_δ=0.75 (D=0.225), φ=0.9 → 0.5750 / 0.2750 / 0.1388.
+ *  The φ ∈ {0, 0.5, 1} column of aquinas_unified is the three-point
+ *  regression test against the old five-mode system.
  */
 export function computeUsuryByMode(
   delta: number,
@@ -212,13 +287,55 @@ export function computeUsuryByMode(
   rho: number,
   lambda: number,
   theologicalMode: string,
+  phi: number,
+  psiDelta = 1,
+  psiPi = 1,
+  psiRho = 1,
+  psiLambda = 1,
 ): number {
-  const m = getTheologicalModeConfig(theologicalMode);
-  return m.wDelta * delta + m.wPi * pi + m.wRho * rho + m.wLambda * lambda;
+  const { config: m, phi: phiEff } = resolveTheologicalMode(theologicalMode, phi);
+  const D =
+    (1 - psiDelta) * delta +
+    (1 - psiPi) * pi +
+    (1 - psiRho) * rho +
+    (1 - psiLambda) * lambda;
+  return m.wRho * (1 - phiEff) * (psiRho * rho) + m.wLambda * (psiLambda * lambda + D);
+}
+
+/** U recomputed at the mode's scholarly range endpoints (pack v2 I.3:
+ *  "display U with its band"). Modes without ranges return a point band. */
+export function computeUsuryBandByMode(
+  delta: number,
+  pi: number,
+  rho: number,
+  lambda: number,
+  theologicalMode: string,
+  phi: number,
+  psiDelta = 1,
+  psiPi = 1,
+  psiRho = 1,
+  psiLambda = 1,
+): { lo: number; hi: number } {
+  const { config: m, phi: phiEff } = resolveTheologicalMode(theologicalMode, phi);
+  const D =
+    (1 - psiDelta) * delta +
+    (1 - psiPi) * pi +
+    (1 - psiRho) * rho +
+    (1 - psiLambda) * lambda;
+  const wRhos = m.rangeRho ?? [m.wRho, m.wRho];
+  const wLams = m.rangeLambda ?? [m.wLambda, m.wLambda];
+  const vals: number[] = [];
+  for (const wr of wRhos) {
+    for (const wl of wLams) {
+      vals.push(wr * (1 - phiEff) * (psiRho * rho) + wl * (psiLambda * lambda + D));
+    }
+  }
+  return { lo: Math.min(...vals), hi: Math.max(...vals) };
 }
 
 /** Mode-weighted usury component of M (display-only — does not change M).
- *  M_usury_mode = (w_rho·ρ + w_lambda·λ) · kp / (1+(k-1)p)
+ *  Substantiation- and contingency-aware (pack v2 I.7):
+ *  M_usury_mode = U_mode · kp / (1+(k-1)p)  with the generalized U.
  */
 export function computeMUsuryMode(
   rho: number,
@@ -226,14 +343,22 @@ export function computeMUsuryMode(
   k: number,
   p: number,
   theologicalMode: string,
+  phi: number,
+  delta = 0,
+  pi = 0,
+  psiDelta = 1,
+  psiPi = 1,
+  psiRho = 1,
+  psiLambda = 1,
 ): number {
-  const m = getTheologicalModeConfig(theologicalMode);
-  return ((m.wRho * rho + m.wLambda * lambda) * k * p) / (1 + (k - 1) * p);
+  const U = computeUsuryByMode(
+    delta, pi, rho, lambda, theologicalMode, phi, psiDelta, psiPi, psiRho, psiLambda,
+  );
+  return (U * k * p) / (1 + (k - 1) * p);
 }
 
 /** Mode-weighted licit component of M (display-only).
- *  M_licit_mode = M − M_usury_mode
- *  = (1 + δ + π + (1−w_rho)·ρ + (1−w_lambda)·λ) · kp / (1+(k-1)p)
+ *  M_licit_mode = M − M_usury_mode = (r − U_mode) · kp / (1+(k-1)p)
  */
 export function computeMLicitMode(
   delta: number,
@@ -243,16 +368,21 @@ export function computeMLicitMode(
   k: number,
   p: number,
   theologicalMode: string,
+  phi: number,
+  psiDelta = 1,
+  psiPi = 1,
+  psiRho = 1,
+  psiLambda = 1,
 ): number {
-  const m = getTheologicalModeConfig(theologicalMode);
-  const rLicit =
-    1 + delta + pi + (1 - m.wRho) * rho + (1 - m.wLambda) * lambda;
-  return (rLicit * k * p) / (1 + (k - 1) * p);
+  const r = 1 + delta + pi + rho + lambda;
+  const U = computeUsuryByMode(
+    delta, pi, rho, lambda, theologicalMode, phi, psiDelta, psiPi, psiRho, psiLambda,
+  );
+  return ((r - U) * k * p) / (1 + (k - 1) * p);
 }
 
-/** Returns U and T under all five modes for the current cap composition.
- *  Used by the cross-mode comparison panel in the Theology tab.
- */
+/** Returns U (with band) and gated T under all three modes for the current
+ *  cap composition. Used by the cross-mode comparison panel (pack v2 I.7). */
 export function computeTheologicalModeComparison(
   delta: number,
   pi: number,
@@ -260,16 +390,29 @@ export function computeTheologicalModeComparison(
   lambda: number,
   mu: number,
   eta: number,
+  phi: number,
+  Umax: number,
+  psiDelta = 1,
+  psiPi = 1,
+  psiRho = 1,
+  psiLambda = 1,
 ) {
   return THEOLOGICAL_MODES.map((mode) => {
-    const U = computeUsuryByMode(delta, pi, rho, lambda, mode.key);
-    const T = computeT(U, mu, eta);
+    const U = computeUsuryByMode(
+      delta, pi, rho, lambda, mode.key, phi, psiDelta, psiPi, psiRho, psiLambda,
+    );
+    const band = computeUsuryBandByMode(
+      delta, pi, rho, lambda, mode.key, phi, psiDelta, psiPi, psiRho, psiLambda,
+    );
+    const T = computeT(U, mu, eta, Umax);
     return {
       key: mode.key,
       label: mode.label,
       wRho: mode.wRho,
       wLambda: mode.wLambda,
       U,
+      Ulo: band.lo,
+      Uhi: band.hi,
       T,
       rationale: mode.rationale,
       source: mode.source,
@@ -277,8 +420,13 @@ export function computeTheologicalModeComparison(
   });
 }
 
-export const computeT = (U: number, mu: number, eta: number) =>
-  1 - U + mu * eta;
+/** Gated integrity score (pack v2 I.4, paper §4.7; U_max = founder decision
+ *  2 Jul 2026). Coincides with the old 1−U+μη at U = 0.
+ *  Acceptance (μ=1, η=0.7, U_max=0.8): U=0 → 1.700; U=0.25 → 1.231;
+ *  U=0.55 → 0.669; U=0.85 → 0; U=1.10 → 0. Scenario C now FAILS T ≥ 0.8
+ *  by design. */
+export const computeT = (U: number, mu: number, eta: number, Umax: number) =>
+  U > Umax ? 0 : 1 - U + mu * eta * (1 - U / Umax);
 
 export const computeLU = (L0: number, alpha: number, U: number) =>
   clamp(L0 * (1 - alpha * U), 0);
@@ -380,11 +528,24 @@ export const computeAll = (params: DsfParams): Derived => {
   const Mlicit = computeMLicit(params.delta, params.pi, params.k, effectiveP);
   const Musury = computeMUsury(params.rho, params.lambda, params.k, effectiveP);
   // Mode-weighted licit/usury split — display-only, does not change M.
-  const MlicitMode = computeMLicitMode(params.delta, params.pi, params.rho, params.lambda, params.k, effectiveP, params.theologicalMode);
-  const MusuryMode = computeMUsuryMode(params.rho, params.lambda, params.k, effectiveP, params.theologicalMode);
-  // U is now mode-aware; DSF working baseline reproduces the original 0.5·ρ + λ exactly.
-  const U = computeUsuryByMode(params.delta, params.pi, params.rho, params.lambda, params.theologicalMode);
-  const T = computeT(U, params.mu, params.eta);
+  const MlicitMode = computeMLicitMode(
+    params.delta, params.pi, params.rho, params.lambda, params.k, effectiveP,
+    params.theologicalMode, params.phi,
+    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+  );
+  const MusuryMode = computeMUsuryMode(
+    params.rho, params.lambda, params.k, effectiveP,
+    params.theologicalMode, params.phi, params.delta, params.pi,
+    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+  );
+  // Generalized U (pack v2 I.3): aquinas_unified @ φ=0.5, ψ≡1 reproduces the
+  // original 0.5·ρ + λ exactly.
+  const U = computeUsuryByMode(
+    params.delta, params.pi, params.rho, params.lambda,
+    params.theologicalMode, params.phi,
+    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+  );
+  const T = computeT(U, params.mu, params.eta, params.Umax);
   const L = computeLU(params.L0, params.alpha, U);
   const forcedOS = params.openSource;
   const forcedSov = params.stewardOwnership && params.euRetention;

@@ -92,8 +92,12 @@ export default function TheologyPage() {
   const modeComparison = useMemo(
     () => computeTheologicalModeComparison(
       params.delta, params.pi, params.rho, params.lambda, params.mu, params.eta,
+      params.phi, params.Umax,
+      params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
     ),
-    [params.delta, params.pi, params.rho, params.lambda, params.mu, params.eta],
+    [params.delta, params.pi, params.rho, params.lambda, params.mu, params.eta,
+     params.phi, params.Umax,
+     params.psiDelta, params.psiPi, params.psiRho, params.psiLambda],
   );
 
   return (
@@ -522,7 +526,10 @@ export default function TheologyPage() {
               </thead>
               <tbody>
                 {THEOLOGY_SCENARIOS.map((s) => {
-                  const U = computeUsuryByMode(s.delta, s.pi, s.rho, s.lambda, params.theologicalMode);
+                  const U = computeUsuryByMode(
+                    s.delta, s.pi, s.rho, s.lambda, params.theologicalMode, params.phi,
+                    params.psiDelta, params.psiPi, params.psiRho, params.psiLambda,
+                  );
                   const tone =
                     s.tone === "good"
                       ? "text-finance"
