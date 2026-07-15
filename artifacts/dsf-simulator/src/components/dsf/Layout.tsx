@@ -81,14 +81,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         {/* ── Row 1: Logo + mode toggle ─────────────────────────────────── */}
         <div className="max-w-[1400px] mx-auto px-6 py-2.5 flex items-center gap-4">
-          <Link
-            href="/"
+          {/* Logo links OUT to the NEC homepage (Melanie, 14 Jul 2026) —
+              plain anchor, not a wouter Link: external origin. */}
+          <a
+            href="https://melanierieback.github.io/NEC-Home-Small/index.html"
             className="flex items-center gap-2 hover-elevate rounded-md shrink-0"
             data-testid="link-home"
+            title="Back to the Non-Extractive Capital homepage"
           >
             <div
               role="img"
-              aria-label="Non-Extractive Capital"
+              aria-label="Non-Extractive Capital — home"
               style={{
                 width: "140px",
                 height: "72px",
@@ -101,7 +104,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 backgroundPosition: "center left",
               }}
             />
-          </Link>
+          </a>
 
           {/* Top-level mode toggle: LP View | Guided | Explore */}
           <div
